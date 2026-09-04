@@ -1,5 +1,5 @@
 [project]
-name = "ai-coach"
+name = "personaltracker"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -7,7 +7,11 @@ authors = [
     { name = "Mauryaraheja", email = "mraheja_be24@thapar.edu" }
 ]
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "groq>=1.7.0",
+    "python-dotenv>=1.2.3",
+    "tavily-python>=0.8.1",
+]
 
 [project.scripts]
 personaltracker = "personaltracker:main"
@@ -15,3 +19,7 @@ personaltracker = "personaltracker:main"
 [build-system]
 requires = ["uv_build>=0.12.9,<0.13.0"]
 build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = "src"
+module-name = "personaltracker"
