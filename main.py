@@ -28,6 +28,7 @@ if __name__ == "__main__":
     print("\nExtracting text from your CV...\n")
     cv_text = extract_text_from_pdf(cv_path)
 
+    print(f"\nExtracted {len(cv_text)} characters total.")
     print("--- Extracted CV text (preview) ---\n")
     print(cv_text[:1000])
     if len(cv_text) > 1000:
