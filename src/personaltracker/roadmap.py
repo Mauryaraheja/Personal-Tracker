@@ -115,6 +115,6 @@ def get_skill_roadmap(role: str) -> list[dict]:
     skills = data.get("skills", [])
 
     for i, skill in enumerate(skills, start=1):
-        skill["id"] = f"skl_{i:02d}"
+        skill["id"] = f"skl_{i:03d}"
 
     return skills

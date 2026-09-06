@@ -1,12 +1,8 @@
 """
 Entry point for the AI Career Coach CLI.
-
-The real logic now lives in src/personaltracker/ -- the project has
-enough distinct pieces (skill roadmap generation, CV parsing) to
-benefit from being split into modules instead of one growing file.
 """
 
-from personaltracker import get_skill_roadmap, extract_text_from_pdf
+from personaltracker import get_skill_roadmap, extract_text_from_pdf, get_skill_gaps
 
 
 def print_roadmap(skills: list[dict]) -> None:
@@ -18,6 +14,19 @@ def print_roadmap(skills: list[dict]) -> None:
         print(f"    Source: {skill.get('source_url', 'n/a')}\n")
 
 
+def print_gaps(gaps: list[dict], skills: list[dict]) -> None:
+    # map skill_id -> name, so the display is readable instead of raw ids
+    name_by_id = {s["id"]: s["name"] for s in skills}
+
+    print("--- Gap analysis ---\n")
+    for i, gap in enumerate(gaps, start=1):
+        skill_name = name_by_id.get(gap["skill_id"], gap["skill_id"])
+        print(f"{i}. {skill_name} -- {gap['status'].upper()}")
+        if gap["evidence_from_cv"]:
+            print(f"   Evidence in CV: {gap['evidence_from_cv']}")
+        print(f"   Suggestion: {gap['suggestion']}\n")
+
+
 if __name__ == "__main__":
     role = input("What role or interest are you exploring? ")
     print(f"\nSearching for real, current info on '{role}'...\n")
@@ -27,9 +36,8 @@ if __name__ == "__main__":
     cv_path = input("\nPath to your CV (PDF): ").strip()
     print("\nExtracting text from your CV...\n")
     cv_text = extract_text_from_pdf(cv_path)
+    print(f"Extracted {len(cv_text)} characters total.\n")
 
-    print(f"\nExtracted {len(cv_text)} characters total.")
-    print("--- Extracted CV text (preview) ---\n")
-    print(cv_text[:1000])
-    if len(cv_text) > 1000:
-        print("\n...(truncated)\n")
+    print("Analyzing gaps against the roadmap...\n")
+    gaps = get_skill_gaps(skills, cv_text)
+    print_gaps(gaps, skills)
