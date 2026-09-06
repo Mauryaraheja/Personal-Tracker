@@ -13,25 +13,32 @@ Two paths, tried in order:
 """
 
 import pypdf
-from pdf2image import convert_from_path
 import pytesseract
+from pathlib import Path
+from pdf2image import convert_from_path, convert_from_bytes
 
 # Below this many characters per page, we assume there's no real text
 # layer and this is a scanned image rather than a text-based PDF.
 MIN_CHARS_PER_PAGE = 50
 
 
-def extract_text_from_pdf(pdf_path: str) -> str:
-    reader = pypdf.PdfReader(pdf_path)
-    num_pages = len(reader.pages)
-    pages_text = [page.extract_text() or "" for page in reader.pages]
-    text = "\n".join(pages_text)
+def extract_text_from_pdf(pdf_source) -> str:
+    # pypdf.PdfReader already accepts a path string OR a file-like object,
+    # so this line needs no change regardless of what pdf_source is.
+    reader = PdfReader(pdf_source)
+    text = "\n".join(page.extract_text() or "" for page in reader.pages)
 
-    if _looks_like_scanned(text, num_pages):
-        print("No real text layer found -- falling back to OCR (this is slower).")
-        text = _extract_with_ocr(pdf_path)
+    if _looks_like_scanned(text, len(reader.pages)):
+        if isinstance(pdf_source, (str, Path)):
+            images = convert_from_path(pdf_source)
+        else:
+            # PdfReader already consumed part of the stream above,
+            # so rewind before reading it again for OCR.
+            pdf_source.seek(0)
+            images = convert_from_bytes(pdf_source.read())
+        text = "\n".join(pytesseract.image_to_string(img) for img in images)
 
-    return text.strip()
+    return text
 
 
 def _looks_like_scanned(text: str, num_pages: int) -> bool:
