@@ -46,6 +46,54 @@ def format_postings_for_prompt(postings: list[dict]) -> str:
         blocks.append(f"Source: {p.get('url')}\n{snippet}")
     return "\n\n".join(blocks)
 
+def extract_skills_from_posting(role: str, posting: dict) -> list[str]:
+    """
+    Extract technical skills from ONE job posting.
+    Returns only skill names.
+    """
+
+    prompt = f"""
+    This is ONE real job posting for the role: {role}
+
+    URL:
+    {posting.get("url")}
+
+    Content:
+    {posting.get("content", "")[:3000]}
+
+    Extract every specific technical skill, framework, library,
+    platform, database, cloud service, programming language,
+    or tool explicitly mentioned.
+
+    Do NOT infer missing skills.
+
+    Return JSON only.
+
+    {{
+        "skills": [
+            "PyTorch",
+            "Spark",
+            "AWS"
+        ]
+    }}
+    """
+
+    response = groq_client.chat.completions.create(
+        model="openai/gpt-oss-120b",
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_object"},
+    )
+
+    raw = response.choices[0].message.content
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        print("Invalid JSON while extracting posting skills.")
+        print(raw)
+        return []
+
+    return data.get("skills", [])
 
 def extract_market_skills(role: str, postings: list[dict]) -> list[dict]:
     """Read real job postings and extract the technical skills that
@@ -70,9 +118,12 @@ def extract_market_skills(role: str, postings: list[dict]) -> list[dict]:
     (e.g. "K8s" and "Kubernetes"), pick the most common/canonical name
     and count both as the same skill.
 
-    Only include skills mentioned in at least 2 postings -- a skill
-    appearing in exactly one posting is more likely a one-off company
-    preference than a real market pattern.
+    Extract every specific technical skill, tool, framework, platform, or
+    library you can identify from the postings.
+
+    If the evidence is limited because the posting snippets are short,
+    include the skill anyway and estimate mention_count conservatively.
+    Do not return an empty list unless no technical skills are mentioned at all.
 
     Return a JSON object with a single key "market_skills", a list of
     objects, each with exactly these keys:

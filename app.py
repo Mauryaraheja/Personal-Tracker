@@ -18,6 +18,7 @@ from personaltracker import (
     extract_text_from_pdf,
     get_skill_gaps,
     get_or_create_roadmap,
+    get_market_validation,
     get_tracker_items,
     update_tracker_status,
 )
@@ -45,8 +46,10 @@ DEFAULTS = {
     "tracker": None,
     "cv_text": None,
     "gaps": None,
+    "market_insights": None,
     "uploader_key": 0,
 }
+
 for key, value in DEFAULTS.items():
     if key not in st.session_state:
         st.session_state[key] = value
@@ -221,3 +224,68 @@ if st.session_state.gaps:
                 st.caption(f"From your CV: {gap['evidence_from_cv']}")
             if gap.get("suggestion"):
                 st.write(gap["suggestion"])
+
+
+# ---------------------------------------------------------------------------
+# Section 5: Market Insights
+# ---------------------------------------------------------------------------
+# Independent of the CV/Gaps flow above -- only needs a roadmap to exist, not
+# a completed gap analysis. Deliberately not auto-run: costs a Tavily search
+# plus two Groq calls, and job postings go stale fast, so it's an explicit
+# on-demand check rather than baked into get_or_create_roadmap's cache flow.
+if st.session_state.skills:
+    st.divider()
+    st.header("Market Insights")
+    st.caption("Check your roadmap against real, live job postings")
+
+    if st.button("Check against real job postings"):
+        try:
+            with st.spinner("Scanning real job postings..."):
+                insights = get_market_validation(
+                    st.session_state.role, st.session_state.skills
+                )
+            st.session_state.market_insights = insights
+        except Exception as e:
+            st.error(
+                "Couldn't complete the market check. This is usually a Groq "
+                "or Tavily API issue (rate limit, network, or bad key) -- try "
+                "again in a moment."
+            )
+            with st.expander("Technical details"):
+                st.exception(e)
+
+    if st.session_state.market_insights:
+        insights = st.session_state.market_insights
+        scanned = insights.get("total_postings_scanned", 0)
+
+        if scanned == 0:
+            st.info("No job postings found for this role -- try again later.")
+        else:
+            if insights.get("confirmed"):
+                st.subheader("✅ Confirmed by real postings")
+                for item in insights["confirmed"]:
+                    st.write(
+                        f"**{item['roadmap_skill_name']}** — matched "
+                        f"\"{item['matched_market_skill']}\", mentioned in "
+                        f"{item['mention_count']} of {scanned} postings"
+                    )
+
+            if insights.get("suggested_additions"):
+                st.subheader("➕ Suggested additions")
+                st.caption("Skills real postings ask for that aren't in your roadmap yet")
+                for item in insights["suggested_additions"]:
+                    st.write(
+                        f"**{item['skill_name']}** — mentioned in "
+                        f"{item['mention_count']} of {scanned} postings"
+                    )
+
+            if insights.get("weak_signal"):
+                st.subheader("⚪ Not confirmed by this batch")
+                st.caption("Not necessarily wrong -- postings often skip foundational or assumed skills")
+                for item in insights["weak_signal"]:
+                    st.write(f"**{item['roadmap_skill_name']}**")
+
+            st.caption(
+                f"Based on {scanned} postings scanned via Tavily — a "
+                "directional signal, not a comprehensive market survey."
+            )
