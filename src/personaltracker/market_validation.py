@@ -95,6 +95,63 @@ def extract_skills_from_posting(role: str, posting: dict) -> list[str]:
 
     return data.get("skills", [])
 
+def consolidate_skill_mentions(raw_mentions: list[dict]) -> list[dict]:
+    """
+    Group different names that refer to the same technology.
+    """
+
+    unique_skills = sorted(
+        {mention["skill_name"] for mention in raw_mentions}
+    )
+
+    prompt = f"""
+    Below is a list of technical skill names extracted from job postings.
+
+    Group names that refer to the same technology.
+
+    For example:
+
+    Spark -> Apache Spark
+
+    K8s -> Kubernetes
+
+    Amazon Web Services -> AWS
+
+    Return JSON only.
+
+    {{
+        "skill_groups": [
+            {{
+                "canonical_name": "Apache Spark",
+                "aliases_seen": [
+                    "Spark",
+                    "Apache Spark"
+                ]
+            }}
+        ]
+    }}
+
+    Skills:
+
+    {json.dumps(unique_skills, indent=2)}
+    """
+
+    response = groq_client.chat.completions.create(
+        model="openai/gpt-oss-120b",
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_object"},
+    )
+
+    raw = response.choices[0].message.content
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        print(raw)
+        return []
+
+    return data.get("skill_groups", [])
+
 def extract_market_skills(role: str, postings: list[dict]) -> list[dict]:
     """
     Extract skills from each posting individually.
@@ -123,7 +180,52 @@ def extract_market_skills(role: str, postings: list[dict]) -> list[dict]:
     print("\n========== RAW MENTIONS ==========")
     print(raw_mentions)
 
-    return raw_mentions
+    groups = consolidate_skill_mentions(raw_mentions)
+
+    print("\n========== GROUPS ==========")
+    print(groups)  
+
+    seen_aliases = {
+    alias.strip().lower()
+    for group in groups
+    for alias in group["aliases_seen"]
+}
+
+    for mention in raw_mentions:
+        if mention["skill_name"].strip().lower() not in seen_aliases:
+            groups.append(
+            {
+                "canonical_name": mention["skill_name"],
+                "aliases_seen": [mention["skill_name"]],
+            }
+        )
+
+    market_skills = []
+
+    for group in groups:
+        aliases = {
+        alias.strip().lower()
+        for alias in group["aliases_seen"]
+        }
+
+        matched_urls = {
+        mention["source_url"]
+        for mention in raw_mentions
+        if mention["skill_name"] in aliases
+    }
+
+        market_skills.append(
+        {
+            "skill_name": group["canonical_name"],
+            "mention_count": len(matched_urls),
+            "source_urls": sorted(matched_urls),
+        }
+    )
+
+    for i, skill in enumerate(market_skills, start=1):
+        skill["id"] = f"mkt_{i:03d}"
+
+    return market_skills
 
 
 def compare_to_roadmap(roadmap_skills: list[dict], market_skills: list[dict]) -> dict:
