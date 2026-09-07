@@ -45,16 +45,21 @@ def init_db() -> None:
                 skill_id TEXT NOT NULL,
                 name TEXT NOT NULL,
                 description TEXT,
+                why_it_matters TEXT,
+                priority TEXT,
+                level_required TEXT,
+                source_url TEXT,
                 PRIMARY KEY (role, skill_id)
             );
 
             CREATE TABLE IF NOT EXISTS tracker_items (
-                id TEXT PRIMARY KEY,
+                id TEXT NOT NULL,
                 role TEXT NOT NULL,
                 skill_id TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'not_started',
                 notes TEXT,
                 updated_at TEXT NOT NULL,
+                PRIMARY KEY (role, skill_id),
                 FOREIGN KEY (role, skill_id) REFERENCES skills (role, skill_id)
             );
             """
@@ -71,8 +76,19 @@ def _save_roadmap(conn: sqlite3.Connection, role: str, skills: list[dict]) -> No
     now = datetime.now(timezone.utc).isoformat()
     for i, skill in enumerate(skills, start=1):
         conn.execute(
-            "INSERT INTO skills (role, skill_id, name, description) VALUES (?, ?, ?, ?)",
-            (role, skill["id"], skill.get("name"), skill.get("description")),
+            """INSERT INTO skills
+               (role, skill_id, name, description, why_it_matters, priority, level_required, source_url)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                role,
+                skill["id"],
+                skill.get("name"),
+                skill.get("description"),
+                skill.get("why_it_matters"),
+                skill.get("priority"),
+                skill.get("level_required"),
+                skill.get("source_url"),
+            ),
         )
         conn.execute(
             """INSERT INTO tracker_items (id, role, skill_id, status, notes, updated_at)
@@ -91,7 +107,9 @@ def get_or_create_roadmap(role: str) -> list[dict]:
     with _get_connection() as conn:
         if _role_has_saved_roadmap(conn, role):
             rows = conn.execute(
-                "SELECT skill_id AS id, name, description FROM skills WHERE role = ?",
+                """SELECT skill_id AS id, name, description, why_it_matters,
+                          priority, level_required, source_url
+                   FROM skills WHERE role = ?""",
                 (role,),
             ).fetchall()
             return [dict(row) for row in rows]

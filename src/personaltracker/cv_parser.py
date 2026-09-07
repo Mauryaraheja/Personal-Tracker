@@ -25,7 +25,7 @@ MIN_CHARS_PER_PAGE = 50
 def extract_text_from_pdf(pdf_source) -> str:
     # pypdf.PdfReader already accepts a path string OR a file-like object,
     # so this line needs no change regardless of what pdf_source is.
-    reader = PdfReader(pdf_source)
+    reader = pypdf.PdfReader(pdf_source)
     text = "\n".join(page.extract_text() or "" for page in reader.pages)
 
     if _looks_like_scanned(text, len(reader.pages)):
