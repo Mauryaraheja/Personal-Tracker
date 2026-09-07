@@ -21,6 +21,8 @@ import json
 from .clients import groq_client, tavily_client
 from .roadmap import refine_role
 
+DEBUG = False
+
 MARKET_DOMAINS = ["greenhouse.io", "lever.co", "indeed.com", "wellfound.com"]
 
 
@@ -53,30 +55,57 @@ def extract_skills_from_posting(role: str, posting: dict) -> list[str]:
     """
 
     prompt = f"""
-    This is ONE real job posting for the role: {role}
+    The text below is ONE real job posting for the role: {role}.
+
+    Read the job description carefully and identify every technical skill,
+    framework, library, programming language, database, cloud platform,
+    machine learning framework, analytics tool, infrastructure tool,
+    or technology that is explicitly mentioned.
 
     URL:
     {posting.get("url")}
 
     Content:
-    {posting.get("content", "")[:3000]}
+    {posting.get("content", "")[:5000]}
 
-    Extract every specific technical skill, framework, library,
-    platform, database, cloud service, programming language,
-    or tool explicitly mentioned.
+    Examples of the kinds of skills to extract include:
+    - Python
+    - SQL
+    - PyTorch
+    - TensorFlow
+    - Scikit-learn
+    - Spark
+    - Hadoop
+    - Airflow
+    - dbt
+    - Snowflake
+    - Docker
+    - Kubernetes
+    - AWS
+    - Azure
+    - GCP
+    - Tableau
+    - Power BI
 
-    Do NOT infer missing skills.
+    Only include technologies that are explicitly mentioned in the text.
+    Do NOT guess or infer technologies that are not written.
 
-    Return JSON only.
+    Return JSON only in the following format:
 
     {{
         "skills": [
-            "PyTorch",
+            "Python",
             "Spark",
             "AWS"
         ]
     }}
     """
+
+    if DEBUG:
+        print("=" * 80)
+        print(posting.get("url"))
+        print(posting.get("content", "")[:5000])
+        print("=" * 80)
 
     response = groq_client.chat.completions.create(
         model="openai/gpt-oss-120b",
@@ -85,6 +114,11 @@ def extract_skills_from_posting(role: str, posting: dict) -> list[str]:
     )
 
     raw = response.choices[0].message.content
+
+    if DEBUG:
+        print("\n========== RAW SKILL EXTRACTION ==========")
+        print(raw)
+        print("=========================================\n")
 
     try:
         data = json.loads(raw)
@@ -177,13 +211,15 @@ def extract_market_skills(role: str, postings: list[dict]) -> list[dict]:
                 }
             )
 
-    print("\n========== RAW MENTIONS ==========")
-    print(raw_mentions)
+    if DEBUG:
+        print("\n========== RAW MENTIONS ==========")
+        print(raw_mentions)
 
     groups = consolidate_skill_mentions(raw_mentions)
 
-    print("\n========== GROUPS ==========")
-    print(groups)  
+    if DEBUG:
+        print("\n========== GROUPS ==========")
+        print(groups)  
 
     seen_aliases = {
     alias.strip().lower()
