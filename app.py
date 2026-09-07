@@ -1,17 +1,35 @@
 """
 Streamlit UI for the AI Career Coach (Personal Tracker).
 
-Flow: Choose a Role -> Your Required Skills -> Upload Your CV -> Your Gaps
+Flow: Choose a Role -> Your Required Skills (with progress tracking) ->
+Upload Your CV -> Next Steps
 
 Uses st.session_state because Streamlit reruns this entire script top-to-bottom
 on every interaction (typing, clicking, uploading). Without state, the skills
 list generated in step 1 would vanish by the time the user reaches step 3.
+
+Skills and progress are persisted in SQLite (see tracker.py) -- the first time
+a role is tracked it costs a Groq/Tavily call, every visit after that is a
+local database read.
 """
 
 import streamlit as st
-from personaltracker import get_skill_roadmap, extract_text_from_pdf, get_skill_gaps
+from personaltracker import (
+    extract_text_from_pdf,
+    get_skill_gaps,
+    get_or_create_roadmap,
+    get_tracker_items,
+    update_tracker_status,
+)
 
 st.set_page_config(page_title="NextRole", layout="wide")
+
+STATUS_OPTIONS = ["not_started", "in_progress", "completed"]
+STATUS_LABELS = {
+    "not_started": "Not started",
+    "in_progress": "In progress",
+    "completed": "Completed",
+}
 
 # ---------------------------------------------------------------------------
 # Session state
@@ -24,6 +42,7 @@ st.set_page_config(page_title="NextRole", layout="wide")
 DEFAULTS = {
     "role": None,
     "skills": None,
+    "tracker": None,
     "cv_text": None,
     "gaps": None,
     "uploader_key": 0,
@@ -40,6 +59,20 @@ def reset_all():
             st.session_state[key] += 1  # force a new file_uploader widget
         else:
             st.session_state[key] = value
+
+
+def _on_status_change(role, skill_id, widget_key):
+    """
+    Fires when a skill's progress selectbox changes. Writes the new status to
+    the database, then updates the in-memory copy in session_state so the UI
+    reflects the change immediately without a fresh database read.
+    """
+    new_status = st.session_state[widget_key]
+    update_tracker_status(role, skill_id, new_status)
+    for item in st.session_state.tracker:
+        if item["skill_id"] == skill_id:
+            item["status"] = new_status
+            break
 
 
 st.title("NextRole")
@@ -65,22 +98,29 @@ if st.button("Find Required Skills", type="primary"):
         st.warning("Enter a role first.")
     else:
         try:
-            with st.spinner("Researching current requirements for this role..."):
+            with st.spinner("Loading required skills for this role..."):
                 role = role_input.strip()
-                skills = get_skill_roadmap(role)
-            # Only commit to session_state once the call has actually succeeded --
-            # if get_skill_roadmap raises partway through, we don't want a role
-            # set with no matching skills.
+                # get_or_create_roadmap only hits Groq/Tavily the first time
+                # this role is ever tracked -- after that it reads from the
+                # database, which is why this can be slow once and instant
+                # every time after.
+                skills = get_or_create_roadmap(role)
+                tracker = get_tracker_items(role)
+            # Only commit to session_state once both calls have actually
+            # succeeded -- we don't want a role set with no matching skills,
+            # or skills with no matching tracker rows.
             st.session_state.role = role
             st.session_state.skills = skills
+            st.session_state.tracker = tracker
             # A new role invalidates any CV analysis run against the old skills.
             st.session_state.cv_text = None
             st.session_state.gaps = None
         except Exception as e:
             st.error(
-                "Couldn't generate the skill roadmap. This is usually a Groq or "
-                "Tavily API issue (rate limit, network, or bad key) rather than "
-                "a problem with your input -- try again in a moment."
+                "Couldn't load the skill roadmap. If this is the first time "
+                "tracking this role, it's usually a Groq or Tavily API issue "
+                "(rate limit, network, or bad key). If it's a role you've "
+                "tracked before, it's more likely a database problem."
             )
             with st.expander("Technical details"):
                 st.exception(e)
@@ -92,11 +132,31 @@ if st.session_state.skills:
     st.divider()
     st.header("Your Required Skills")
     st.caption(f"For: {st.session_state.role}")
+    # Looked up by skill_id so each skill card can show/update its own
+    # progress without scanning the whole tracker list per skill.
+    tracker_by_skill = {t["skill_id"]: t for t in st.session_state.tracker}
     for skill in st.session_state.skills:
         with st.container(border=True):
-            st.markdown(f"**{skill.get('name', skill.get('id'))}**")
-            if skill.get("description"):
-                st.caption(skill["description"])
+            col_info, col_status = st.columns([3, 1])
+            with col_info:
+                st.markdown(f"**{skill.get('name', skill.get('id'))}**")
+                if skill.get("description"):
+                    st.caption(skill["description"])
+            with col_status:
+                current_status = tracker_by_skill.get(skill["id"], {}).get(
+                    "status", "not_started"
+                )
+                widget_key = f"status_{skill['id']}"
+                st.selectbox(
+                    "Progress",
+                    STATUS_OPTIONS,
+                    index=STATUS_OPTIONS.index(current_status),
+                    format_func=lambda s: STATUS_LABELS[s],
+                    key=widget_key,
+                    on_change=_on_status_change,
+                    args=(st.session_state.role, skill["id"], widget_key),
+                    label_visibility="collapsed",
+                )
 
     # -----------------------------------------------------------------------
     # Section 3: Upload Your CV

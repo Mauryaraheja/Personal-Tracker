@@ -10,3 +10,5 @@ __pycache__/
 
 # VS Code settings (optional)
 .vscode/
+
+personaltracker.db
