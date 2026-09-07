@@ -96,65 +96,34 @@ def extract_skills_from_posting(role: str, posting: dict) -> list[str]:
     return data.get("skills", [])
 
 def extract_market_skills(role: str, postings: list[dict]) -> list[dict]:
-    """Read real job postings and extract the technical skills that
-    actually appear in them, with how many postings mention each one."""
+    """
+    Extract skills from each posting individually.
 
-    postings_text = format_postings_for_prompt(postings)
-    total_postings = len(postings)
-
-    prompt = f"""
-    Here are {total_postings} real job postings for the role: {role}
-
-    {postings_text}
-
-    Read through ALL postings above and identify the specific technical
-    skills, tools, and frameworks actually mentioned -- named things like
-    "Kubernetes", "PyTorch", "dbt", not vague categories like "cloud
-    experience" or "team player".
-
-    For each distinct skill, count how many of the {total_postings}
-    postings mention it (a posting mentioning the same skill twice still
-    counts once). If postings use different names for the same thing
-    (e.g. "K8s" and "Kubernetes"), pick the most common/canonical name
-    and count both as the same skill.
-
-    Extract every specific technical skill, tool, framework, platform, or
-    library you can identify from the postings.
-
-    If the evidence is limited because the posting snippets are short,
-    include the skill anyway and estimate mention_count conservatively.
-    Do not return an empty list unless no technical skills are mentioned at all.
-
-    Return a JSON object with a single key "market_skills", a list of
-    objects, each with exactly these keys:
-    - "skill_name": the canonical skill name
-    - "mention_count": integer, how many postings mention it
-    - "source_urls": list of URLs (from the postings above) that mention it
-
-    Respond with JSON only, no extra text.
+    Temporary version:
+    Returns raw skill mentions before consolidation.
     """
 
-    response = groq_client.chat.completions.create(
-        model="openai/gpt-oss-120b",
-        messages=[{"role": "user", "content": prompt}],
-        response_format={"type": "json_object"},
-    )
+    raw_mentions = []
 
-    raw_text = response.choices[0].message.content
+    for posting in postings:
 
-    try:
-        data = json.loads(raw_text)
-    except json.JSONDecodeError:
-        print("The model didn't return valid JSON. Raw response:")
-        print(raw_text)
-        return []
+        skills = extract_skills_from_posting(role, posting)
 
-    market_skills = data.get("market_skills", [])
+        print(f"\n{posting['url']}")
+        print(skills)
 
-    for i, skill in enumerate(market_skills, start=1):
-        skill["id"] = f"mkt_{i:03d}"
+        for skill in skills:
+            raw_mentions.append(
+                {
+                    "skill_name": skill,
+                    "source_url": posting["url"],
+                }
+            )
 
-    return market_skills
+    print("\n========== RAW MENTIONS ==========")
+    print(raw_mentions)
+
+    return raw_mentions
 
 
 def compare_to_roadmap(roadmap_skills: list[dict], market_skills: list[dict]) -> dict:
