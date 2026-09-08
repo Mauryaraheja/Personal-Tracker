@@ -29,7 +29,6 @@ DEBUG = False
 MARKET_DOMAINS = [
     "greenhouse.io",
     "lever.co",
-    "wellfound.com",
 ]
 
 
@@ -37,16 +36,31 @@ def search_job_postings(role: str, max_results: int = 12) -> list[dict]:
     """Fetch real, live job postings for a role -- not skill roundup
     articles, actual posting pages. Higher max_results than
     roadmap.search_job_info's 5, since frequency counts need a slightly
-    larger sample to mean anything."""
+    larger sample to mean anything.
+
+    Deduplicates by normalized URL -- Tavily can return the same posting
+    twice under http:// vs https:// or with a different query string,
+    which would otherwise silently inflate mention_count downstream."""
     response = tavily_client.search(
-    query=f"{role} job opening responsibilities requirements qualifications",
-    max_results=max_results,
-    search_depth="advanced",
-    include_domains=MARKET_DOMAINS,
-    include_domains_mode="filter",
-    include_raw_content="text",
+        query=f"{role} job opening responsibilities requirements qualifications",
+        max_results=max_results,
+        search_depth="advanced",
+        include_domains=MARKET_DOMAINS,
+        include_domains_mode="filter",
+        include_raw_content="text",
     )
-    return response.get("results", [])
+    results = response.get("results", [])
+
+    seen = set()
+    deduped = []
+    for r in results:
+        url = r.get("url", "")
+        normalized = url.split("://", 1)[-1].split("?")[0].rstrip("/")
+        if normalized not in seen:
+            seen.add(normalized)
+            deduped.append(r)
+
+    return deduped
 
 
 def format_postings_for_prompt(postings: list[dict]) -> str:

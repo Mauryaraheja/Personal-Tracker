@@ -1,12 +1,19 @@
-from personaltracker.roadmap import refine_role
-from personaltracker.market_validation import search_job_postings
+from personaltracker import get_or_create_roadmap
+from personaltracker.market_validation import get_market_validation
 
-refined = refine_role("Gen Ai")
-print(f"Refined role: {refined}")
+role = "Gen Ai"  # matches what's already tracked in your DB
+roadmap_skills = get_or_create_roadmap(role)  # DB read, no API cost
 
-postings = search_job_postings(refined)
-print(f"Got {len(postings)} postings\n")
-for p in postings:
-    print(p.get("url"))
-    print(p.get("content", "")[:200])
-    print("---")
+result = get_market_validation(role=role, roadmap_skills=roadmap_skills)
+
+print("\n========== MARKET SKILLS ==========")
+print(result["market_skills"])
+
+print("\n========== CONFIRMED ==========")
+print(result["confirmed"])
+
+print("\n========== SUGGESTED ADDITIONS ==========")
+print(result["suggested_additions"])
+
+print("\n========== WEAK SIGNAL ==========")
+print(result["weak_signal"])
