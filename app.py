@@ -241,15 +241,21 @@ if st.session_state.skills:
     if st.button("Check against real job postings"):
         try:
             with st.status("Scanning real job postings...", expanded=True) as status:
-            # inside the loop in extract_market_skills, or by passing a callback in:
-                status.update(label=f"Reading posting {i} of {len(postings)}...")
+                def update_progress(current, total):
+                    status.update(label=f"Reading posting {current} of {total}...")
+
+                insights = get_market_validation(
+                    st.session_state.role, st.session_state.skills,
+                    progress_callback=update_progress,
+                )
+                status.update(label="Done", state="complete")
             st.session_state.market_insights = insights
         except Exception as e:
             st.error(
-                "Couldn't complete the market check. This is usually a Groq "
-                "or Tavily API issue (rate limit, network, or bad key) -- try "
-                "again in a moment."
-            )
+            "Couldn't complete the market check. This is usually a Groq "
+            "or Tavily API issue (rate limit, network, or bad key) -- try "
+            "again in a moment."
+        )
             with st.expander("Technical details"):
                 st.exception(e)
 

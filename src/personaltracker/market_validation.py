@@ -228,7 +228,9 @@ def extract_market_skills(role: str, postings: list[dict]) -> list[dict]:
 
     raw_mentions = []
 
-    for posting in postings:
+    for i, posting in enumerate(postings, start=1):
+        if progress_callback:
+            progress_callback(i, len(postings))
 
         skills = extract_skills_from_posting(role, posting)
 
@@ -389,7 +391,7 @@ def compare_to_roadmap(roadmap_skills: list[dict], market_skills: list[dict]) ->
     return data
 
 
-def get_market_validation(role: str, roadmap_skills: list[dict]) -> dict:
+def get_market_validation(role: str, roadmap_skills: list[dict], progress_callback=None) -> dict:
     """Full pipeline: refine the role, pull real postings, extract skills
     actually asked for, compare against the existing roadmap. Called
     explicitly from the UI -- not part of get_or_create_roadmap()."""
@@ -407,7 +409,7 @@ def get_market_validation(role: str, roadmap_skills: list[dict]) -> dict:
             "total_postings_scanned": 0,
         }
 
-    market_skills = extract_market_skills(refined_role, postings)
+    market_skills = extract_market_skills(refined_role, postings, progress_callback=progress_callback)
     comparison = compare_to_roadmap(roadmap_skills, market_skills)
     comparison["market_skills"] = market_skills
     comparison["total_postings_scanned"] = len(postings)
