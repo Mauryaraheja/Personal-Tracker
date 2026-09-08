@@ -8,10 +8,13 @@ Deliberately NOT wired into get_or_create_roadmap()'s cache-or-generate
 flow. The roadmap is evergreen and correctly cached in SQLite; job
 postings go stale in weeks, not months, so mixing the two into one
 cached object would misrepresent how fresh the market data actually is.
+
 This runs as an explicit, separate action instead (see app.py).
 
-Only pulls from company ATS pages and job boards with no login wall and
-no scraping-enforcement history (Greenhouse, Lever, Indeed, Wellfound).
+Searches trusted job-posting sources (currently Greenhouse, Lever and
+Wellfound) to minimize blog articles and hiring guides while keeping the
+results focused on real job descriptions.
+
 LinkedIn and Glassdoor are deliberately excluded -- having Tavily fetch
 their pages on our behalf raises the same ToS/consent problem as
 scraping them directly.
@@ -23,19 +26,25 @@ from .roadmap import refine_role
 
 DEBUG = False
 
-MARKET_DOMAINS = ["greenhouse.io", "lever.co", "indeed.com", "wellfound.com"]
+MARKET_DOMAINS = [
+    "greenhouse.io",
+    "lever.co",
+    "wellfound.com",
+]
 
 
-def search_job_postings(role: str, max_results: int = 8) -> list[dict]:
+def search_job_postings(role: str, max_results: int = 12) -> list[dict]:
     """Fetch real, live job postings for a role -- not skill roundup
     articles, actual posting pages. Higher max_results than
     roadmap.search_job_info's 5, since frequency counts need a slightly
     larger sample to mean anything."""
     response = tavily_client.search(
-        query=f"{role} job posting requirements qualifications",
-        max_results=max_results,
-        search_depth="advanced",
-        include_domains=MARKET_DOMAINS,
+    query=f"{role} job opening responsibilities requirements qualifications",
+    max_results=max_results,
+    search_depth="advanced",
+    include_domains=MARKET_DOMAINS,
+    include_domains_mode="filter",
+    include_raw_content="text",
     )
     return response.get("results", [])
 
@@ -54,6 +63,8 @@ def extract_skills_from_posting(role: str, posting: dict) -> list[str]:
     Returns only skill names.
     """
 
+    text = posting.get("raw_content") or posting.get("content", "")
+
     prompt = f"""
     The text below is ONE real job posting for the role: {role}.
 
@@ -66,7 +77,7 @@ def extract_skills_from_posting(role: str, posting: dict) -> list[str]:
     {posting.get("url")}
 
     Content:
-    {posting.get("content", "")[:5000]}
+    {text[:10000]}
 
     Examples of the kinds of skills to extract include:
     - Python
@@ -89,6 +100,12 @@ def extract_skills_from_posting(role: str, posting: dict) -> list[str]:
 
     Only include technologies that are explicitly mentioned in the text.
     Do NOT guess or infer technologies that are not written.
+        Prefer specific, named technologies over broad categories -- extract
+    "PyTorch" or "scikit-learn" rather than "Machine Learning"; extract
+    "AWS" or "GCP" rather than "cloud computing". Only include a broad
+    category term (e.g. "Machine Learning", "Internet of Things") if the
+    posting calls it out as a specific requirement and does not name any
+    more specific technology for it.
 
     Return JSON only in the following format:
 
@@ -189,9 +206,10 @@ def consolidate_skill_mentions(raw_mentions: list[dict]) -> list[dict]:
 def extract_market_skills(role: str, postings: list[dict]) -> list[dict]:
     """
     Extract skills from each posting individually.
+    Extract technical skills from multiple job postings,
+    consolidate aliases, and compute mention counts based
+    on distinct postings.
 
-    Temporary version:
-    Returns raw skill mentions before consolidation.
     """
 
     raw_mentions = []
@@ -200,8 +218,9 @@ def extract_market_skills(role: str, postings: list[dict]) -> list[dict]:
 
         skills = extract_skills_from_posting(role, posting)
 
-        print(f"\n{posting['url']}")
-        print(skills)
+        if DEBUG:
+            print(f"\n{posting['url']}")
+            print(skills)
 
         for skill in skills:
             raw_mentions.append(
@@ -234,6 +253,10 @@ def extract_market_skills(role: str, postings: list[dict]) -> list[dict]:
                 "canonical_name": mention["skill_name"],
                 "aliases_seen": [mention["skill_name"]],
             }
+
+        )
+            seen_aliases.add(
+        mention["skill_name"].strip().lower()
         )
 
     market_skills = []
@@ -247,7 +270,7 @@ def extract_market_skills(role: str, postings: list[dict]) -> list[dict]:
         matched_urls = {
         mention["source_url"]
         for mention in raw_mentions
-        if mention["skill_name"] in aliases
+        if mention["skill_name"].strip().lower() in aliases
     }
 
         market_skills.append(
