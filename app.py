@@ -263,11 +263,11 @@ if st.session_state.skills:
             if insights.get("confirmed"):
                 st.subheader("✅ Confirmed by real postings")
                 for item in insights["confirmed"]:
+                    matched = ", ".join(item.get("matched_market_skills", []))
                     st.write(
-                        f"**{item['roadmap_skill_name']}** — matched "
-                        f"\"{item['matched_market_skill']}\", mentioned in "
-                        f"{item['mention_count']} of {scanned} postings"
-                    )
+                    f"**{item['roadmap_skill_name']}** — matched {matched}, "
+                    f"mentioned in {item['mention_count']} of {scanned} postings"
+            )
 
             if insights.get("suggested_additions"):
                 st.subheader("➕ Suggested additions")

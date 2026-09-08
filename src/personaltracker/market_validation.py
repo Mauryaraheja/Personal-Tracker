@@ -306,7 +306,13 @@ def compare_to_roadmap(roadmap_skills: list[dict], market_skills: list[dict]) ->
     real job postings. Single call across the whole roadmap -- same
     reasoning as gap_analysis.get_skill_gaps: cheap at this scale, and
     lets the model reason about near-duplicate names consistently
-    instead of skill-by-skill."""
+    instead of skill-by-skill.
+
+    A roadmap skill can be confirmed by MULTIPLE market skills (e.g.
+    "Vector Databases" backed by Chroma, Pinecone, and Weaviate all at
+    once) -- the model only decides WHICH market skills apply; the real
+    mention_count and source_urls are computed in Python afterward from
+    market_skills, not trusted from the model's own arithmetic."""
 
     roadmap_text = "\n".join(
         f"- id: {s['id']}, name: {s['name']}" for s in roadmap_skills
@@ -324,18 +330,21 @@ def compare_to_roadmap(roadmap_skills: list[dict], market_skills: list[dict]) ->
     {market_text}
 
     Match these two lists semantically -- the same skill may be named
-    differently in each. Use your judgment on whether two names are
-    close enough to count as a match.
+    differently in each, and a single roadmap skill can reasonably be
+    confirmed by MORE THAN ONE market skill. For example, if the roadmap
+    has "Vector Databases" and the market skills include "Chroma",
+    "Pinecone", and "Weaviate", all three should be listed as backing
+    that one roadmap skill -- do not pick only the closest single match.
 
     Return a JSON object with exactly these three keys:
 
-    "confirmed": roadmap skills a market skill backs up. List of objects
-    with "roadmap_skill_id", "roadmap_skill_name", "matched_market_skill",
-    "mention_count".
+    "confirmed": roadmap skills backed up by one or more market skills.
+    List of objects with "roadmap_skill_id", "roadmap_skill_name",
+    "matched_market_skills" (a list of one or more market skill names).
 
     "suggested_additions": market skills with no close match in the
     roadmap -- real skills employers ask for that the roadmap is missing.
-    List of objects with "skill_name", "mention_count", "source_urls".
+    List of objects with "skill_name".
 
     "weak_signal": roadmap skills with no market skill backing them up.
     This does NOT mean they're wrong -- postings often omit foundational
@@ -360,10 +369,19 @@ def compare_to_roadmap(roadmap_skills: list[dict], market_skills: list[dict]) ->
         print(raw_text)
         return {"confirmed": [], "suggested_additions": [], "weak_signal": []}
 
-
     market_by_name = {m["skill_name"]: m for m in market_skills}
+
+    for item in data.get("confirmed", []):
+        urls = set()
+        for name in item.get("matched_market_skills", []):
+            source = market_by_name.get(name)
+            if source:
+                urls.update(source["source_urls"])
+        item["mention_count"] = len(urls)
+        item["source_urls"] = sorted(urls)
+
     for item in data.get("suggested_additions", []):
-        source = market_by_name.get(item["skill_name"])
+        source = market_by_name.get(item.get("skill_name"))
         if source:
             item["mention_count"] = source["mention_count"]
             item["source_urls"] = source["source_urls"]
