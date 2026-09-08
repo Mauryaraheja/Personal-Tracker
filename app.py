@@ -240,10 +240,9 @@ if st.session_state.skills:
 
     if st.button("Check against real job postings"):
         try:
-            with st.spinner("Scanning real job postings..."):
-                insights = get_market_validation(
-                    st.session_state.role, st.session_state.skills
-                )
+            with st.status("Scanning real job postings...", expanded=True) as status:
+            # inside the loop in extract_market_skills, or by passing a callback in:
+                status.update(label=f"Reading posting {i} of {len(postings)}...")
             st.session_state.market_insights = insights
         except Exception as e:
             st.error(

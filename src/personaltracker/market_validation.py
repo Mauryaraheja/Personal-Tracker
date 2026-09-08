@@ -346,6 +346,14 @@ def compare_to_roadmap(roadmap_skills: list[dict], market_skills: list[dict]) ->
         print(raw_text)
         return {"confirmed": [], "suggested_additions": [], "weak_signal": []}
 
+
+    market_by_name = {m["skill_name"]: m for m in market_skills}
+    for item in data.get("suggested_additions", []):
+        source = market_by_name.get(item["skill_name"])
+        if source:
+            item["mention_count"] = source["mention_count"]
+            item["source_urls"] = source["source_urls"]
+
     return data
 
 
