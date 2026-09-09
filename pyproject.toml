@@ -1,7 +1,7 @@
 [project]
 name = "personaltracker"
 version = "0.1.0"
-description = "Add your description here"
+description = "NextRole -- an AI career coach that builds a sourced skill roadmap for a target role, tracks progress against it, and validates it against real job postings."
 readme = "README.md"
 authors = [
     { name = "Mauryaraheja", email = "mraheja_be24@thapar.edu" }
@@ -16,9 +16,6 @@ dependencies = [
     "streamlit>=1.63.0",
     "tavily-python>=0.8.1",
 ]
-
-[project.scripts]
-personaltracker = "personaltracker:main"
 
 [build-system]
 requires = ["uv_build>=0.12.9,<0.13.0"]

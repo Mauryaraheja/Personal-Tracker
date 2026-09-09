@@ -107,14 +107,6 @@ def search_job_postings(role: str, per_domain: int = 4, max_total: int = 12) -> 
 
     return deduped[:max_total]
 
-def format_postings_for_prompt(postings: list[dict]) -> str:
-    """Turn raw postings into text the LLM can read, one block per posting."""
-    blocks = []
-    for p in postings:
-        snippet = p.get("content", "")[:1500]
-        blocks.append(f"Source: {p.get('url')}\n{snippet}")
-    return "\n\n".join(blocks)
-
 def extract_skills_from_posting(role: str, posting: dict, max_retries: int = 3) -> list[str]:
     """
     Extract technical skills from ONE job posting.

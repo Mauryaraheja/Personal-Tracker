@@ -18,6 +18,7 @@ description later would mean updating N rows instead of one.
 """
 
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -29,15 +30,30 @@ DB_PATH = Path(__file__).resolve().parent.parent.parent / "personaltracker.db"
 VALID_STATUSES = {"not_started", "in_progress", "completed"}
 
 
-def _get_connection() -> sqlite3.Connection:
+@contextmanager
+def _connect():
+    """Opens a connection, commits on success, rolls back on failure, and
+    always closes it afterwards.
+
+    Worth being explicit about why this wrapper exists: sqlite3's own
+    `with conn:` block manages the *transaction*, not the connection --
+    it commits or rolls back, but never closes. So the obvious-looking
+    `with sqlite3.connect(...) as conn:` leaks one open connection per
+    call. Wrapping both concerns here keeps every call site to a single
+    `with` and makes the cleanup impossible to forget.
+    """
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row  # lets us do dict(row) and row["column_name"]
-    return conn
+    try:
+        with conn:  # commit / rollback
+            yield conn
+    finally:
+        conn.close()  # release the file handle
 
 
 def init_db() -> None:
     """Creates both tables if they don't already exist. Safe to call every time."""
-    with _get_connection() as conn:
+    with _connect() as conn:
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS skills (
@@ -104,7 +120,7 @@ def get_or_create_roadmap(role: str) -> list[dict]:
     existing Groq/Tavily pipeline) and saves it so future visits are instant.
     """
     init_db()
-    with _get_connection() as conn:
+    with _connect() as conn:
         if _role_has_saved_roadmap(conn, role):
             rows = conn.execute(
                 """SELECT skill_id AS id, name, description, why_it_matters,
@@ -121,7 +137,7 @@ def get_or_create_roadmap(role: str) -> list[dict]:
 
 def get_tracker_items(role: str) -> list[dict]:
     """Returns progress rows for a role, each joined with its skill's name/description."""
-    with _get_connection() as conn:
+    with _connect() as conn:
         rows = conn.execute(
             """SELECT t.id, t.skill_id, s.name, s.description, t.status, t.notes, t.updated_at
                FROM tracker_items t
@@ -139,7 +155,7 @@ def update_tracker_status(role: str, skill_id: str, status: str, notes: str | No
         raise ValueError(f"status must be one of {VALID_STATUSES}, got {status!r}")
 
     now = datetime.now(timezone.utc).isoformat()
-    with _get_connection() as conn:
+    with _connect() as conn:
         conn.execute(
             """UPDATE tracker_items
                SET status = ?, notes = COALESCE(?, notes), updated_at = ?

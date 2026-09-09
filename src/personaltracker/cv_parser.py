@@ -44,9 +44,3 @@ def extract_text_from_pdf(pdf_source) -> str:
 def _looks_like_scanned(text: str, num_pages: int) -> bool:
     avg_chars_per_page = len(text) / max(num_pages, 1)
     return avg_chars_per_page < MIN_CHARS_PER_PAGE
-
-
-def _extract_with_ocr(pdf_path: str) -> str:
-    images = convert_from_path(pdf_path)
-    pages_text = [pytesseract.image_to_string(image) for image in images]
-    return "\n".join(pages_text)
