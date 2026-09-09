@@ -221,16 +221,33 @@ def consolidate_skill_mentions(raw_mentions: list[dict]) -> list[dict]:
 
     prompt = f"""
     Below is a list of technical skill names extracted from job postings.
+    Different postings write the same technology different ways. Group
+    every name that refers to the SAME underlying technology.
 
-    Group names that refer to the same technology.
+    Merge these kinds of variants:
+    - Abbreviation and full name: "K8s" / "Kubernetes";
+      "AWS" / "Amazon Web Services"; "LLM" / "LLMs" /
+      "Large Language Models" / "Large Language Models (LLMs)"
+    - Singular and plural: "Vector Database" / "Vector Databases"
+    - Vendor-prefixed and bare: "Gemini" / "Google Gemini";
+      "Meta Llama" / "Llama"; "Microsoft Azure" / "Azure"
+    - Version-numbered and generic: "Llama" / "Llama2" / "Llama 3";
+      "GPT" / "GPT-4"
+    - Common shorthand: "Spark" / "Apache Spark";
+      "Postgres" / "PostgreSQL"
 
-    For example:
+    Do NOT merge names that are genuinely different technologies, even
+    when they sound related or share a vendor. For example:
+    - "PostgreSQL" and "pgvector" are different (a database vs. an
+      extension)
+    - "Vertex AI" and "Vertex AI Vector Search" are different (a
+      platform vs. one service on it)
+    - "Python" and "PyTorch" are different
+    When unsure, leave them as separate groups rather than merging.
 
-    Spark -> Apache Spark
-
-    K8s -> Kubernetes
-
-    Amazon Web Services -> AWS
+    Every name in the list below must appear in exactly one group's
+    "aliases_seen". A name with no variants forms a group by itself.
+    Use the most complete, conventional spelling as "canonical_name".
 
     Return JSON only.
 
@@ -451,6 +468,9 @@ def compare_to_roadmap(roadmap_skills: list[dict], market_skills: list[dict]) ->
         if source:
             item["mention_count"] = source["mention_count"]
             item["source_urls"] = source["source_urls"]
+
+    for key in ("confirmed", "suggested_additions", "weak_signal"):
+        data.setdefault(key, [])
 
     return data
 

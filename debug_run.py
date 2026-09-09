@@ -1,13 +1,15 @@
-from collections import Counter
-from personaltracker.market_validation import search_job_postings
+from personaltracker import get_or_create_roadmap
+from personaltracker.market_validation import get_market_validation
 
-postings = search_job_postings("Generative AI Engineer")
-print(f"Got {len(postings)} postings\n")
+role = "Gen Ai"
+roadmap_skills = get_or_create_roadmap(role)
+result = get_market_validation(role=role, roadmap_skills=roadmap_skills)
 
-for p in postings:
-    print(p.get("url"))
+print("\n========== CONFIRMED ==========")
+print(result["confirmed"])
 
-print("\n========== DOMAIN SPREAD ==========")
-domains = Counter(p.get("url", "").split("/")[2] for p in postings)
-for domain, count in domains.most_common():
-    print(f"{domain}: {count}")
+print("\n========== SUGGESTED ADDITIONS ==========")
+print(result["suggested_additions"])
+
+print("\n========== WEAK SIGNAL ==========")
+print(result["weak_signal"])
