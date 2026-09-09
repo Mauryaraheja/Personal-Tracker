@@ -42,11 +42,19 @@ MARKET_DOMAINS = [
 ]
 
 
-def search_job_postings(role: str, max_results: int = 12) -> list[dict]:
-    """Fetch real, live job postings for a role -- not skill roundup
-    articles, actual posting pages. Higher max_results than
-    roadmap.search_job_info's 5, since frequency counts need a slightly
-    larger sample to mean anything.
+def search_job_postings(role: str, per_domain: int = 4, max_total: int = 12) -> list[dict]:
+    """Fetch real, live job postings for a role -- one search per domain
+    rather than one pooled search across all of them.
+
+    Tavily ranks a pooled multi-domain search by relevance alone, and
+    Greenhouse has far more indexed postings than the others, so a single
+    call returns almost entirely Greenhouse results and the smaller
+    platforms never appear. Searching each domain separately guarantees
+    every source actually gets represented.
+
+    Results are interleaved round-robin before the total cap is applied,
+    so trimming to max_total takes a slice across all domains rather than
+    exhausting the first domain's results first.
 
     Excludes Wellfound's aggregator/category pages (/role/r/{slug}) --
     those list multiple unrelated roles on one page, unlike the genuine
@@ -55,28 +63,49 @@ def search_job_postings(role: str, max_results: int = 12) -> list[dict]:
     Deduplicates by normalized URL -- Tavily can return the same posting
     twice under http:// vs https:// or with a different query string,
     which would otherwise silently inflate mention_count downstream."""
-    response = tavily_client.search(
-        query=f"{role} job opening responsibilities requirements qualifications",
-        max_results=max_results,
-        search_depth="advanced",
-        include_domains=MARKET_DOMAINS,
-        include_domains_mode="filter",
-        include_raw_content="text",
-    )
-    results = response.get("results", [])
 
-    results = [r for r in results if "wellfound.com/role/" not in r.get("url", "")]
+    query = f"{role} job opening responsibilities requirements qualifications"
+    per_domain_results = []
+
+    for domain in MARKET_DOMAINS:
+        try:
+            response = tavily_client.search(
+                query=query,
+                max_results=per_domain,
+                search_depth="advanced",
+                include_domains=[domain],
+                include_domains_mode="filter",
+                include_raw_content="text",
+            )
+            per_domain_results.append(response.get("results", []))
+        except Exception as e:
+            # One bad domain shouldn't kill the whole market check --
+            # log it and carry on with whatever the others return.
+            print(f"Search failed for {domain}: {e}")
+            per_domain_results.append([])
+
+    # Round-robin interleave: first result from each domain, then the
+    # second from each, and so on.
+    interleaved = []
+    for i in range(per_domain):
+        for domain_results in per_domain_results:
+            if i < len(domain_results):
+                interleaved.append(domain_results[i])
+
+    interleaved = [
+        r for r in interleaved if "wellfound.com/role/" not in r.get("url", "")
+    ]
 
     seen = set()
     deduped = []
-    for r in results:
+    for r in interleaved:
         url = r.get("url", "")
         normalized = url.split("://", 1)[-1].split("?")[0].rstrip("/")
         if normalized not in seen:
             seen.add(normalized)
             deduped.append(r)
 
-    return deduped
+    return deduped[:max_total]
 
 def format_postings_for_prompt(postings: list[dict]) -> str:
     """Turn raw postings into text the LLM can read, one block per posting."""
