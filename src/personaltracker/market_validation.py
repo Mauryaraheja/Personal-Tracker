@@ -11,9 +11,13 @@ cached object would misrepresent how fresh the market data actually is.
 
 This runs as an explicit, separate action instead (see app.py).
 
-Searches trusted job-posting sources (currently Greenhouse, Lever and
-Wellfound) to minimize blog articles and hiring guides while keeping the
-results focused on real job descriptions.
+Searches trusted job-posting sources (currently Greenhouse, Lever, Ashby,
+Workable, and Wellfound) to minimize blog articles and hiring guides
+while keeping the results focused on real job descriptions. Wellfound
+hosts both genuine single postings (/jobs/{id}) and aggregator/category
+pages (/role/r/{slug}) on the same domain -- the aggregator shape is
+filtered out by URL path below, since include_domains only restricts by
+domain and can't distinguish the two.
 
 LinkedIn and Glassdoor are deliberately excluded -- having Tavily fetch
 their pages on our behalf raises the same ToS/consent problem as
@@ -23,12 +27,18 @@ scraping them directly.
 import json
 from .clients import groq_client, tavily_client
 from .roadmap import refine_role
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
+from groq import RateLimitError
 
 DEBUG = False
 
 MARKET_DOMAINS = [
     "greenhouse.io",
     "lever.co",
+    "jobs.ashbyhq.com",
+    "apply.workable.com",
+    "wellfound.com"
 ]
 
 
@@ -37,6 +47,10 @@ def search_job_postings(role: str, max_results: int = 12) -> list[dict]:
     articles, actual posting pages. Higher max_results than
     roadmap.search_job_info's 5, since frequency counts need a slightly
     larger sample to mean anything.
+
+    Excludes Wellfound's aggregator/category pages (/role/r/{slug}) --
+    those list multiple unrelated roles on one page, unlike the genuine
+    single-posting pages (/jobs/{id}) on the same domain.
 
     Deduplicates by normalized URL -- Tavily can return the same posting
     twice under http:// vs https:// or with a different query string,
@@ -51,6 +65,8 @@ def search_job_postings(role: str, max_results: int = 12) -> list[dict]:
     )
     results = response.get("results", [])
 
+    results = [r for r in results if "wellfound.com/role/" not in r.get("url", "")]
+
     seen = set()
     deduped = []
     for r in results:
@@ -62,7 +78,6 @@ def search_job_postings(role: str, max_results: int = 12) -> list[dict]:
 
     return deduped
 
-
 def format_postings_for_prompt(postings: list[dict]) -> str:
     """Turn raw postings into text the LLM can read, one block per posting."""
     blocks = []
@@ -71,7 +86,7 @@ def format_postings_for_prompt(postings: list[dict]) -> str:
         blocks.append(f"Source: {p.get('url')}\n{snippet}")
     return "\n\n".join(blocks)
 
-def extract_skills_from_posting(role: str, posting: dict) -> list[str]:
+def extract_skills_from_posting(role: str, posting: dict, max_retries: int = 3) -> list[str]:
     """
     Extract technical skills from ONE job posting.
     Returns only skill names.
@@ -131,20 +146,26 @@ def extract_skills_from_posting(role: str, posting: dict) -> list[str]:
         ]
     }}
     """
+    for attempt in range(max_retries):
+        try:
+            response = groq_client.chat.completions.create(
+                model="openai/gpt-oss-120b",
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+            )
+            break
+        except RateLimitError:
+            if attempt == max_retries - 1:
+                raise  # out of retries -- let it surface, don't pretend it succeeded
+            time.sleep(3 * (attempt + 1))  # 3s, 6s, 9s
+
+    raw = response.choices[0].message.content
 
     if DEBUG:
         print("=" * 80)
         print(posting.get("url"))
         print(posting.get("content", "")[:5000])
         print("=" * 80)
-
-    response = groq_client.chat.completions.create(
-        model="openai/gpt-oss-120b",
-        messages=[{"role": "user", "content": prompt}],
-        response_format={"type": "json_object"},
-    )
-
-    raw = response.choices[0].message.content
 
     if DEBUG:
         print("\n========== RAW SKILL EXTRACTION ==========")
@@ -217,34 +238,38 @@ def consolidate_skill_mentions(raw_mentions: list[dict]) -> list[dict]:
 
     return data.get("skill_groups", [])
 
-def extract_market_skills(role: str, postings: list[dict]) -> list[dict]:
+
+def extract_market_skills(role: str, postings: list[dict], progress_callback=None) -> list[dict]:
     """
     Extract skills from each posting individually.
     Extract technical skills from multiple job postings,
     consolidate aliases, and compute mention counts based
-    on distinct postings.
-
-    """
-
+    on distinct postings. """
+      
     raw_mentions = []
+    completed = 0
 
-    for i, posting in enumerate(postings, start=1):
-        if progress_callback:
-            progress_callback(i, len(postings))
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        future_to_posting = {
+            executor.submit(extract_skills_from_posting, role, posting): posting
+            for posting in postings
+        }
 
-        skills = extract_skills_from_posting(role, posting)
+        for future in as_completed(future_to_posting):
+            posting = future_to_posting[future]
+            completed += 1
+            if progress_callback:
+                progress_callback(completed, len(postings))
 
-        if DEBUG:
-            print(f"\n{posting['url']}")
-            print(skills)
+            skills = future.result()
 
-        for skill in skills:
-            raw_mentions.append(
-                {
-                    "skill_name": skill,
-                    "source_url": posting["url"],
-                }
-            )
+            if DEBUG:
+                print(f"\n{posting['url']}")
+                print(skills)
+
+            for skill in skills:
+                raw_mentions.append({"skill_name": skill, "source_url": posting["url"]})
+
 
     if DEBUG:
         print("\n========== RAW MENTIONS ==========")
@@ -337,6 +362,16 @@ def compare_to_roadmap(roadmap_skills: list[dict], market_skills: list[dict]) ->
     has "Vector Databases" and the market skills include "Chroma",
     "Pinecone", and "Weaviate", all three should be listed as backing
     that one roadmap skill -- do not pick only the closest single match.
+
+    Being able to list multiple matches does NOT mean being loose about
+    what counts as a match. Each individual market skill you list must be
+    a genuinely closer or more specific name for the SAME underlying
+    skill -- not merely a related or adjacent topic. For example, "Deep
+    Learning" or "Large Language Models" should NOT be treated as
+    confirming "Model Fine-Tuning of LLMs" just because they're in the
+    same general domain -- fine-tuning itself would need to be explicitly
+    named or clearly implied. When in doubt, leave a roadmap skill in
+    weak_signal rather than force a loose match.
 
     Return a JSON object with exactly these three keys:
 
