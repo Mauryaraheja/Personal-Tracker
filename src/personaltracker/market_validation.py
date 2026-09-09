@@ -158,12 +158,22 @@ def extract_skills_from_posting(role: str, posting: dict, max_retries: int = 3) 
 
     Only include technologies that are explicitly mentioned in the text.
     Do NOT guess or infer technologies that are not written.
-        Prefer specific, named technologies over broad categories -- extract
+    Prefer specific, named technologies over broad categories -- extract
     "PyTorch" or "scikit-learn" rather than "Machine Learning"; extract
     "AWS" or "GCP" rather than "cloud computing". Only include a broad
     category term (e.g. "Machine Learning", "Internet of Things") if the
     posting calls it out as a specific requirement and does not name any
     more specific technology for it.
+     Do NOT extract:
+    - Delivery or architecture models: "SaaS", "PaaS", "IaaS",
+      "serverless", "microservices", "cloud-native"
+    - Methodologies and ways of working: "Agile", "Scrum", "DevOps"
+    - Generic infrastructure words with no specific product named:
+      "APIs", "databases", "pipelines", "version control"
+    - Company names on their own, when no product is named -- extract
+      "GPT" or "Claude", not "OpenAI" or "Anthropic" as a bare skill
+    These are real terms, but they are not learnable technologies
+    someone would add to a skill roadmap.
 
     Return JSON only in the following format:
 

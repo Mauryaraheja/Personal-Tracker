@@ -271,18 +271,29 @@ if st.session_state.skills:
                 for item in insights["confirmed"]:
                     matched = ", ".join(item.get("matched_market_skills", []))
                     st.write(
-                    f"**{item['roadmap_skill_name']}** — matched {matched}, "
-                    f"mentioned in {item['mention_count']} of {scanned} postings"
-            )
+                        f"**{item['roadmap_skill_name']}** — matched {matched}, "
+                        f"mentioned in {item.get('mention_count', 0)} of {scanned} postings"
+                    )
+            
 
             if insights.get("suggested_additions"):
                 st.subheader("➕ Suggested additions")
                 st.caption("Skills real postings ask for that aren't in your roadmap yet")
-                for item in insights["suggested_additions"]:
+
+                additions = insights["suggested_additions"]
+                strong = [a for a in additions if a.get("mention_count", 0) >= 2]
+                weak = [a for a in additions if a.get("mention_count", 0) < 2]
+
+                for item in sorted(strong, key=lambda a: -a.get("mention_count", 0)):
                     st.write(
                         f"**{item['skill_name']}** — mentioned in "
                         f"{item['mention_count']} of {scanned} postings"
                     )
+
+                if weak:
+                    with st.expander(f"Mentioned in only one posting ({len(weak)})"):
+                        for item in weak:
+                            st.write(item["skill_name"])
 
             if insights.get("weak_signal"):
                 st.subheader("⚪ Not confirmed by this batch")
