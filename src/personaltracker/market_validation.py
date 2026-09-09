@@ -245,9 +245,10 @@ def consolidate_skill_mentions(raw_mentions: list[dict]) -> list[dict]:
     - "Python" and "PyTorch" are different
     When unsure, leave them as separate groups rather than merging.
 
-    Every name in the list below must appear in exactly one group's
-    "aliases_seen". A name with no variants forms a group by itself.
-    Use the most complete, conventional spelling as "canonical_name".
+    Only return groups that contain TWO OR MORE names. Do not return
+    groups for names that have no variants in the list -- those are
+    handled separately in code. Use the most complete, conventional
+    spelling as "canonical_name".
 
     Return JSON only.
 
@@ -272,6 +273,7 @@ def consolidate_skill_mentions(raw_mentions: list[dict]) -> list[dict]:
         model="openai/gpt-oss-120b",
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_object"},
+        max_tokens=8000
     )
 
     raw = response.choices[0].message.content
