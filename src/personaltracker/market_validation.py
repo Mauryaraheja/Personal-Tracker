@@ -135,7 +135,7 @@ def extract_skills_from_posting(role: str, posting: dict, max_retries: int = 3) 
     {posting.get("url")}
 
     Content:
-    {text[:10000]}
+    {text[:4000]}
 
     Examples of the kinds of skills to extract include:
     - Python
@@ -298,10 +298,11 @@ def extract_market_skills(role: str, postings: list[dict], progress_callback=Non
     completed = 0
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        future_to_posting = {
-            executor.submit(extract_skills_from_posting, role, posting): posting
-            for posting in postings
-        }
+        future_to_posting = {}
+        for i, posting in enumerate(postings):
+            if i > 0:
+                time.sleep(4)  # spread calls out to stay under the per-minute token ceiling
+            future_to_posting[executor.submit(extract_skills_from_posting, role, posting)] = posting
 
         for future in as_completed(future_to_posting):
             posting = future_to_posting[future]
