@@ -30,6 +30,27 @@ DB_PATH = Path(__file__).resolve().parent.parent.parent / "personaltracker.db"
 VALID_STATUSES = {"not_started", "in_progress", "completed"}
 
 
+def _normalize_role(role: str) -> str:
+    """Collapse a typed role into the single key used to store it.
+
+    The role string is half of the primary key in both tables, so
+    "Gen AI", "gen ai" and " Gen  AI " have to resolve to the same row.
+    Without this they don't: SQLite compares them as distinct strings, so
+    each spelling silently generates its own roadmap (a wasted Groq +
+    Tavily call) and its own progress rows -- and a user who capitalizes
+    differently on their next visit appears to have lost everything they
+    had tracked, with no error to explain why.
+
+    Only the storage key is normalized. The role as the user actually
+    typed it is still what gets sent to the LLM, since casing can carry
+    real meaning in a job title.
+    """
+    normalized = " ".join(role.split()).lower()
+    if not normalized:
+        raise ValueError("role must not be empty")
+    return normalized
+
+
 @contextmanager
 def _connect():
     """Opens a connection, commits on success, rolls back on failure, and
@@ -120,18 +141,21 @@ def get_or_create_roadmap(role: str) -> list[dict]:
     existing Groq/Tavily pipeline) and saves it so future visits are instant.
     """
     init_db()
+    role_key = _normalize_role(role)
     with _connect() as conn:
-        if _role_has_saved_roadmap(conn, role):
+        if _role_has_saved_roadmap(conn, role_key):
             rows = conn.execute(
                 """SELECT skill_id AS id, name, description, why_it_matters,
                           priority, level_required, source_url
                    FROM skills WHERE role = ?""",
-                (role,),
+                (role_key,),
             ).fetchall()
             return [dict(row) for row in rows]
 
+        # Generate from the role as typed -- only the storage key is
+        # normalized, since the LLM reads the title as written.
         skills = get_skill_roadmap(role)
-        _save_roadmap(conn, role, skills)
+        _save_roadmap(conn, role_key, skills)
         return skills
 
 
@@ -144,7 +168,7 @@ def get_tracker_items(role: str) -> list[dict]:
                JOIN skills s ON s.role = t.role AND s.skill_id = t.skill_id
                WHERE t.role = ?
                ORDER BY t.id""",
-            (role,),
+            (_normalize_role(role),),
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -156,9 +180,14 @@ def update_tracker_status(role: str, skill_id: str, status: str, notes: str | No
 
     now = datetime.now(timezone.utc).isoformat()
     with _connect() as conn:
-        conn.execute(
+        cursor = conn.execute(
             """UPDATE tracker_items
                SET status = ?, notes = COALESCE(?, notes), updated_at = ?
                WHERE role = ? AND skill_id = ?""",
-            (status, notes, now, role, skill_id),
+            (status, notes, now, _normalize_role(role), skill_id),
         )
+        # An UPDATE that matches nothing is not an error in SQL -- it just
+        # does nothing. Silently accepting a write that never landed is
+        # how a tracker ends up disagreeing with what the user sees.
+        if cursor.rowcount == 0:
+            raise KeyError(f"no tracked skill {skill_id!r} for role {role!r}")
