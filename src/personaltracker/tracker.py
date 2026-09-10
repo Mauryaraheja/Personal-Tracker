@@ -15,6 +15,13 @@ Two tables, not one:
 They're kept separate so that skill info lives in exactly one place --
 if it were duplicated into every tracker row, editing a skill's
 description later would mean updating N rows instead of one.
+
+A third table, `role_aliases`, maps whatever the user typed onto the one
+canonical role it means. "Gen AI", "gen ai" and "Generative AI Engineer"
+should all reach the same roadmap, but only the LLM can tell us the last
+one is the same job as the first two -- and asking it on every page load
+would undo the whole point of caching roadmaps in the first place. So the
+answer is looked up once and then remembered here.
 """
 
 import sqlite3
@@ -22,7 +29,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .roadmap import get_skill_roadmap
+from .roadmap import build_roadmap, refine_role
 
 # src/personaltracker/tracker.py -> parent -> parent -> parent = repo root
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "personaltracker.db"
@@ -99,8 +106,64 @@ def init_db() -> None:
                 PRIMARY KEY (role, skill_id),
                 FOREIGN KEY (role, skill_id) REFERENCES skills (role, skill_id)
             );
+
+            CREATE TABLE IF NOT EXISTS role_aliases (
+                typed_role TEXT PRIMARY KEY,
+                role_key TEXT NOT NULL,
+                refined_title TEXT NOT NULL
+            );
             """
         )
+
+
+def _resolve_role_key(conn: sqlite3.Connection, role: str) -> tuple[str, str]:
+    """Work out which canonical role the user's typed text refers to.
+
+    Returns (role_key, refined_title). `role_key` is the database key;
+    `refined_title` is the properly-spelled job title, used for searching.
+
+    _normalize_role alone can't do this job. It fixes casing and spacing,
+    so "Gen AI" and "gen ai" already agree -- but it has no way to know
+    that "Gen AI" and "Generative AI Engineer" are the same job. Only the
+    LLM knows that, via refine_role().
+
+    The catch is that refine_role() is a Groq call, and calling it on
+    every visit would defeat the point of caching roadmaps at all. So the
+    answer gets written to role_aliases the first time and read from
+    there forever after: a new spelling costs one call, a spelling we've
+    seen before costs nothing.
+    """
+    typed = _normalize_role(role)
+
+    row = conn.execute(
+        "SELECT role_key, refined_title FROM role_aliases WHERE typed_role = ?",
+        (typed,),
+    ).fetchone()
+    if row:
+        return row["role_key"], row["refined_title"]
+
+    refined_title = refine_role(role)
+    role_key = _normalize_role(refined_title)
+    conn.execute(
+        """INSERT OR REPLACE INTO role_aliases (typed_role, role_key, refined_title)
+           VALUES (?, ?, ?)""",
+        (typed, role_key, refined_title),
+    )
+    return role_key, refined_title
+
+
+def _lookup_role_key(conn: sqlite3.Connection, role: str) -> str:
+    """The read-only half of _resolve_role_key -- never calls the LLM.
+
+    Used by the tracker functions, which only ever run after a roadmap
+    exists, so the alias is already recorded. Falling back to the typed
+    form keeps roadmaps saved before role_aliases existed reachable.
+    """
+    row = conn.execute(
+        "SELECT role_key FROM role_aliases WHERE typed_role = ?",
+        (_normalize_role(role),),
+    ).fetchone()
+    return row["role_key"] if row else _normalize_role(role)
 
 
 def _role_has_saved_roadmap(conn: sqlite3.Connection, role: str) -> bool:
@@ -141,8 +204,11 @@ def get_or_create_roadmap(role: str) -> list[dict]:
     existing Groq/Tavily pipeline) and saves it so future visits are instant.
     """
     init_db()
-    role_key = _normalize_role(role)
     with _connect() as conn:
+        # A spelling we've seen before resolves from role_aliases with no
+        # API call at all; a new one costs a single refine_role().
+        role_key, refined_title = _resolve_role_key(conn, role)
+
         if _role_has_saved_roadmap(conn, role_key):
             rows = conn.execute(
                 """SELECT skill_id AS id, name, description, why_it_matters,
@@ -152,9 +218,10 @@ def get_or_create_roadmap(role: str) -> list[dict]:
             ).fetchall()
             return [dict(row) for row in rows]
 
-        # Generate from the role as typed -- only the storage key is
-        # normalized, since the LLM reads the title as written.
-        skills = get_skill_roadmap(role)
+        # Build from the refined title, not the raw text -- searching for
+        # "Gen AI" returns generic listicles, "Generative AI Engineer"
+        # returns real job requirements.
+        skills = build_roadmap(refined_title)
         _save_roadmap(conn, role_key, skills)
         return skills
 
@@ -168,7 +235,7 @@ def get_tracker_items(role: str) -> list[dict]:
                JOIN skills s ON s.role = t.role AND s.skill_id = t.skill_id
                WHERE t.role = ?
                ORDER BY t.id""",
-            (_normalize_role(role),),
+            (_lookup_role_key(conn, role),),
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -184,7 +251,7 @@ def update_tracker_status(role: str, skill_id: str, status: str, notes: str | No
             """UPDATE tracker_items
                SET status = ?, notes = COALESCE(?, notes), updated_at = ?
                WHERE role = ? AND skill_id = ?""",
-            (status, notes, now, _normalize_role(role), skill_id),
+            (status, notes, now, _lookup_role_key(conn, role), skill_id),
         )
         # An UPDATE that matches nothing is not an error in SQL -- it just
         # does nothing. Silently accepting a write that never landed is

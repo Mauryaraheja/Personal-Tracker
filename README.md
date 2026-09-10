@@ -134,19 +134,31 @@ src/personaltracker/
 app.py                    # Streamlit UI
 ```
 
-Two tables, deliberately kept separate so a skill's description lives in
-exactly one place instead of being duplicated into every progress row:
+Three tables. The first two are deliberately kept separate so a skill's
+description lives in exactly one place instead of being duplicated into
+every progress row:
 
 ```sql
 skills        (role, skill_id, name, description, why_it_matters,
                priority, level_required, source_url)
 
 tracker_items (id, role, skill_id, status, notes, updated_at)
+
+role_aliases  (typed_role, role_key, refined_title)
 ```
 
 `tracker_items` is keyed on `(role, skill_id)` rather than a generated
 id, because that pair *is* the real uniqueness rule: one progress row per
 skill per role.
+
+`role_aliases` maps whatever the user typed onto the one role it means,
+so `"Gen AI"`, `"gen ai"` and `"Generative AI Engineer"` all reach the
+same roadmap and the same saved progress. Casing and spacing are handled
+in plain Python, but only the LLM can tell that the third one is the same
+job as the first two — and asking it on every page load would undo the
+point of caching roadmaps at all. So the answer is looked up once and
+remembered. A new spelling costs one API call; a familiar one costs
+nothing.
 
 ---
 

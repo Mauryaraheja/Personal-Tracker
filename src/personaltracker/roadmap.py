@@ -54,11 +54,27 @@ def format_sources_for_prompt(search_results: list[dict]) -> str:
 
 
 def get_skill_roadmap(role: str) -> list[dict]:
-    """Search for real sources, then ask the LLM to build a roadmap from them."""
+    """Refine a raw role, then build its roadmap.
 
+    Convenience wrapper over refine_role + build_roadmap, for callers that
+    just want a roadmap and don't need the refined title back. Callers who
+    DO need it (tracker.py uses it as a database key) should call the two
+    steps themselves rather than refining twice.
+    """
     refined_role = refine_role(role)
     if refined_role != role:
         print(f"Interpreting '{role}' as: {refined_role}")
+    return build_roadmap(refined_role)
+
+
+def build_roadmap(refined_role: str) -> list[dict]:
+    """Search for real sources, then ask the LLM to build a roadmap from them.
+
+    Takes an ALREADY-refined job title. Refinement is a separate step
+    because it's a Groq call in its own right, and its result is worth
+    reusing -- tracker.py needs the refined title to key the database, so
+    folding refinement in here would mean paying for it twice.
+    """
 
     search_results = search_job_info(refined_role)
 
