@@ -162,6 +162,44 @@ nothing.
 
 ---
 
+## Tests
+
+```bash
+uv run pytest
+```
+
+52 tests, about a second, **no API keys required**. Nothing here calls
+Groq or Tavily or touches the real database — the LLM and search client
+are replaced with test doubles, and each test gets a throwaway SQLite
+file.
+
+That isn't a shortcut, it's the point. The parts worth testing are the
+parts that decide what's *true*: which postings are duplicates, how many
+postings mention a skill, which roadmap skills a match actually backs up.
+None of that is the model's job, so none of it needs the model to verify.
+
+Some of what's pinned down:
+
+- The same posting returned over `http://` and `https://`, or with
+  different query strings, counts **once** — duplicates would inflate
+  every number the feature reports.
+- `mention_count` means *how many postings ask for this*, not how many
+  times the word appeared, so a skill named three times in one posting
+  still counts once.
+- **Confirmed unions its postings rather than summing them.** If one
+  posting names both Chroma and Pinecone, that's one posting asking for
+  vector databases, not two.
+- Counts are recomputed in Python even when the model volunteers its own.
+- Two spellings of a role reach the same roadmap and the same saved
+  progress, and marking a skill complete never costs an API call.
+
+The suite was checked by deliberately breaking the code — remove URL
+deduplication and 3 tests fail; sum posting counts instead of unioning
+them and the union test fails; stop normalizing role strings and 11 fail.
+A green suite that can't go red isn't evidence of anything.
+
+---
+
 ## Design decisions
 
 **Raw API calls — no LangChain, no ORM.** Every Groq call and every SQL
@@ -223,7 +261,7 @@ Stated rather than hidden:
 - [x] Gap analysis
 - [x] SQLite progress tracking
 - [x] Live job-posting market validation
-- [ ] Test suite for the pure-Python logic — URL dedup, count computation, match reattachment
+- [x] Test suite for the pure-Python logic — URL dedup, count computation, match reattachment
 - [ ] Mock interview loop with a scoring rubric and per-answer feedback
 - [ ] Multi-user support with authentication
 - [ ] Deployment

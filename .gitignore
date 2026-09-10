@@ -13,3 +13,4 @@ __pycache__/
 
 personaltracker.db
 NextRole_Handoff.md
+.pytest_cache/
