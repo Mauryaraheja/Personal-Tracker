@@ -53,19 +53,6 @@ def format_sources_for_prompt(search_results: list[dict]) -> str:
     return "\n\n".join(blocks)
 
 
-def get_skill_roadmap(role: str) -> list[dict]:
-    """Refine a raw role, then build its roadmap.
-
-    Convenience wrapper over refine_role + build_roadmap, for callers that
-    just want a roadmap and don't need the refined title back. Callers who
-    DO need it (tracker.py uses it as a database key) should call the two
-    steps themselves rather than refining twice.
-    """
-    refined_role = refine_role(role)
-    if refined_role != role:
-        print(f"Interpreting '{role}' as: {refined_role}")
-    return build_roadmap(refined_role)
-
 
 def build_roadmap(refined_role: str) -> list[dict]:
     """Search for real sources, then ask the LLM to build a roadmap from them.

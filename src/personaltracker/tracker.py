@@ -200,8 +200,8 @@ def _save_roadmap(conn: sqlite3.Connection, role: str, skills: list[dict]) -> No
 def get_or_create_roadmap(role: str) -> list[dict]:
     """
     Returns this role's skill list. Loads it from the database if it was
-    generated before; otherwise generates it via get_skill_roadmap() (the
-    existing Groq/Tavily pipeline) and saves it so future visits are instant.
+    generated before; otherwise builds it with build_roadmap() (one Tavily
+    search + one Groq call) and saves it so future visits are instant.
     """
     init_db()
     with _connect() as conn:
