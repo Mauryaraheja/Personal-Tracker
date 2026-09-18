@@ -28,7 +28,6 @@ import json
 from .clients import groq_client, tavily_client
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
-from groq import RateLimitError
 
 DEBUG = False
 
@@ -106,7 +105,7 @@ def search_job_postings(role: str, per_domain: int = 4, max_total: int = 12) -> 
 
     return deduped[:max_total]
 
-def extract_skills_from_posting(role: str, posting: dict, max_retries: int = 3) -> list[str]:
+def extract_skills_from_posting(role: str, posting: dict) -> list[str]:
     """
     Extract technical skills from ONE job posting.
     Returns only skill names.
@@ -176,18 +175,13 @@ def extract_skills_from_posting(role: str, posting: dict, max_retries: int = 3) 
         ]
     }}
     """
-    for attempt in range(max_retries):
-        try:
-            response = groq_client.chat.completions.create(
-                model="openai/gpt-oss-120b",
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"},
-            )
-            break
-        except RateLimitError:
-            if attempt == max_retries - 1:
-                raise  # out of retries -- let it surface, don't pretend it succeeded
-            time.sleep(3 * (attempt + 1))  # 3s, 6s, 9s
+    # Rate-limit errors are retried inside groq_client itself (see
+    # clients.py), so one call is all this needs.
+    response = groq_client.chat.completions.create(
+        model="openai/gpt-oss-120b",
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_object"},
+    )
 
     raw = response.choices[0].message.content
 
