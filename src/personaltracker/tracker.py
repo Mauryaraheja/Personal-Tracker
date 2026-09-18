@@ -225,6 +225,7 @@ def get_or_create_roadmap(role: str) -> list[dict]:
         _save_roadmap(conn, role_key, skills)
         return skills
 
+
 def get_refined_title(role: str) -> str:
     """Returns the job title this role's roadmap was built from.
 
