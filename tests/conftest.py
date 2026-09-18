@@ -11,9 +11,18 @@ roadmap skills a match backs up. None of that is the model's job; it's
 plain Python, so it can be pinned down exactly.
 """
 
+import os
+
 import pytest
 
-from personaltracker import tracker
+# The package builds its Groq and Tavily clients the moment it's imported,
+# and both refuse to start without a key -- even though no test ever calls
+# them. Placeholder keys let the suite run on a fresh clone with no .env.
+# setdefault() never overwrites a key that's already set.
+os.environ.setdefault("GROQ_API_KEY", "test-key-not-used")
+os.environ.setdefault("TAVILY_API_KEY", "test-key-not-used")
+
+from personaltracker import tracker  # after the keys, or the import fails
 
 
 @pytest.fixture
