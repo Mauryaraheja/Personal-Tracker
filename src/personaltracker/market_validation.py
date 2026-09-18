@@ -26,7 +26,6 @@ scraping them directly.
 
 import json
 from .clients import groq_client, tavily_client
-from .roadmap import refine_role
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 from groq import RateLimitError
@@ -480,12 +479,16 @@ def compare_to_roadmap(roadmap_skills: list[dict], market_skills: list[dict]) ->
     return data
 
 
-def get_market_validation(role: str, roadmap_skills: list[dict], progress_callback=None) -> dict:
-    """Full pipeline: refine the role, pull real postings, extract skills
-    actually asked for, compare against the existing roadmap. Called
-    explicitly from the UI -- not part of get_or_create_roadmap()."""
+def get_market_validation(refined_role: str, roadmap_skills: list[dict], progress_callback=None) -> dict:
+    """Full pipeline: pull real postings for an already-refined job title,
+    extract the skills actually asked for, compare against the existing
+    roadmap. Called explicitly from the UI -- not part of
+    get_or_create_roadmap().
 
-    refined_role = refine_role(role)
+    Takes the title the roadmap was built from (tracker.get_refined_title)
+    instead of refining the role again: a fresh refine_role() call costs a
+    Groq request and could return a different title, which would compare
+    the roadmap against postings for a different job."""
 
     postings = search_job_postings(refined_role)
     if not postings:

@@ -1,9 +1,11 @@
-from personaltracker import get_or_create_roadmap
+from personaltracker import get_or_create_roadmap, get_refined_title
 from personaltracker.market_validation import get_market_validation
 
 role = "Gen Ai"
 roadmap_skills = get_or_create_roadmap(role)
-result = get_market_validation(role=role, roadmap_skills=roadmap_skills)
+result = get_market_validation(
+    refined_role=get_refined_title(role), roadmap_skills=roadmap_skills
+)
 
 print("\n========== CONFIRMED ==========")
 print(result["confirmed"])

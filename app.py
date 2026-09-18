@@ -19,6 +19,7 @@ from personaltracker import (
     get_skill_gaps,
     get_or_create_roadmap,
     get_market_validation,
+    get_refined_title,
     get_tracker_items,
     update_tracker_status,
 )
@@ -230,9 +231,10 @@ if st.session_state.gaps:
 # Section 5: Market Insights
 # ---------------------------------------------------------------------------
 # Independent of the CV/Gaps flow above -- only needs a roadmap to exist, not
-# a completed gap analysis. Deliberately not auto-run: costs a Tavily search
-# plus two Groq calls, and job postings go stale fast, so it's an explicit
-# on-demand check rather than baked into get_or_create_roadmap's cache flow.
+# a completed gap analysis. Deliberately not auto-run: one check costs 5
+# Tavily searches plus up to 14 Groq calls, and job postings go stale fast,
+# so it's an explicit on-demand check rather than baked into
+# get_or_create_roadmap's cache flow.
 if st.session_state.skills:
     st.divider()
     st.header("Market Insights")
@@ -245,7 +247,8 @@ if st.session_state.skills:
                     status.update(label=f"Reading posting {current} of {total}...")
 
                 insights = get_market_validation(
-                    st.session_state.role, st.session_state.skills,
+                    get_refined_title(st.session_state.role),
+                    st.session_state.skills,
                     progress_callback=update_progress,
                 )
                 status.update(label="Done", state="complete")

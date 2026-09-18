@@ -16,6 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 from personaltracker import market_validation as mv
+from personaltracker import roadmap
 
 
 # ---------------------------------------------------------------------------
@@ -396,3 +397,32 @@ def test_consolidation_survives_invalid_json(monkeypatch):
     ))
 
     assert mv.consolidate_skill_mentions([{"skill_name": "Python", "source_url": "A"}]) == []
+
+
+# ---------------------------------------------------------------------------
+# get_market_validation -- searches for the saved title, never asks Groq
+# ---------------------------------------------------------------------------
+
+def test_market_check_uses_the_title_it_is_given_without_asking_groq(monkeypatch):
+    """The roadmap was built for the title saved in role_aliases. Asking
+    Groq again costs a request and could return a different job title."""
+
+    def groq_must_not_be_called(**kwargs):
+        raise AssertionError("the market check asked Groq for a job title")
+
+    no_groq = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=groq_must_not_be_called))
+    )
+    monkeypatch.setattr(roadmap, "groq_client", no_groq)  # refine_role lives here
+
+    searched_for = []
+
+    def fake_search(title):
+        searched_for.append(title)
+        return []  # no postings, so the check stops before reading any
+
+    monkeypatch.setattr(mv, "search_job_postings", fake_search)
+
+    mv.get_market_validation("Generative AI Engineer", ROADMAP)
+
+    assert searched_for == ["Generative AI Engineer"]
