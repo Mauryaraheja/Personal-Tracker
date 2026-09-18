@@ -225,6 +225,24 @@ def get_or_create_roadmap(role: str) -> list[dict]:
         _save_roadmap(conn, role_key, skills)
         return skills
 
+def get_refined_title(role: str) -> str:
+    """Returns the job title this role's roadmap was built from.
+
+    Read-only -- never calls the LLM. get_or_create_roadmap() saved the
+    title in role_aliases the first time it saw this spelling. Reusing
+    it means the market check searches for the same job the roadmap
+    describes; asking refine_role() again costs a Groq call every time
+    and could come back with a different title.
+    """
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT refined_title FROM role_aliases WHERE typed_role = ?",
+            (_normalize_role(role),),
+        ).fetchone()
+    if row is None:
+        raise KeyError(f"no saved job title for role {role!r} -- load its roadmap first")
+    return row["refined_title"]
+
 
 def get_tracker_items(role: str) -> list[dict]:
     """Returns progress rows for a role, each joined with its skill's name/description."""

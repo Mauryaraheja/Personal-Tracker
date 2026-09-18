@@ -200,3 +200,23 @@ def test_unknown_role_raises(db, fake_llm):
 
 def test_tracker_items_for_an_unknown_role_is_empty_not_an_error(db, fake_llm):
     assert db.get_tracker_items("Never Tracked") == []
+
+
+# ---------------------------------------------------------------------------
+# The saved job title -- what the market check searches for
+# ---------------------------------------------------------------------------
+
+def test_refined_title_is_read_back_without_calling_the_llm(db, fake_llm):
+    fake_llm.refinements = {"gen ai": "Generative AI Engineer"}
+    db.get_or_create_roadmap("Gen AI")
+    calls_before = len(fake_llm.refine_calls)
+
+    assert db.get_refined_title("gen ai") == "Generative AI Engineer"
+    assert len(fake_llm.refine_calls) == calls_before, (
+        "reading the saved title must not cost an API call"
+    )
+
+
+def test_refined_title_for_an_unknown_role_raises(db, fake_llm):
+    with pytest.raises(KeyError):
+        db.get_refined_title("Never Tracked")
