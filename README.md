@@ -168,10 +168,10 @@ nothing.
 uv run pytest
 ```
 
-52 tests, about a second, **no API keys required**. Nothing here calls
-Groq or Tavily or touches the real database — the LLM and search client
-are replaced with test doubles, and each test gets a throwaway SQLite
-file.
+55 tests, about a second, **no API keys required** — not even a `.env`
+file. Nothing here calls Groq or Tavily or touches the real database —
+the LLM and search client are replaced with test doubles, and each test
+gets a throwaway SQLite file.
 
 That isn't a shortcut, it's the point. The parts worth testing are the
 parts that decide what's *true*: which postings are duplicates, how many
@@ -192,10 +192,12 @@ Some of what's pinned down:
 - Counts are recomputed in Python even when the model volunteers its own.
 - Two spellings of a role reach the same roadmap and the same saved
   progress, and marking a skill complete never costs an API call.
+- The market check searches for the job title the roadmap was built
+  from, read back from the database — Groq is never asked for it twice.
 
 The suite was checked by deliberately breaking the code — remove URL
 deduplication and 3 tests fail; sum posting counts instead of unioning
-them and the union test fails; stop normalizing role strings and 11 fail.
+them and the union test fails; stop normalizing role strings and 12 fail.
 A green suite that can't go red isn't evidence of anything.
 
 ---
@@ -244,9 +246,12 @@ Stated rather than hidden:
   run can fall to "not confirmed" in the next. The UI describes its own
   output as a directional signal, not a market survey.
 - **Sample size is small** — roughly 12 postings per check.
-- **Groq's free tier caps at 8,000 tokens/minute**, so a full market check
-  is deliberately throttled and takes ~1.5–2 minutes. That's a tier
-  constraint, not a code problem.
+- **Groq's free tier caps at 8,000 tokens/minute**, and one market check
+  needs more than that. Calls are spaced 4 seconds apart, and rate-limited
+  calls wait and retry automatically (the Groq client allows 6 retries).
+  In a test run (Sept 2026), 18 of 32 Groq requests were turned away and
+  retried before succeeding, and the check took about 2.5–3 minutes.
+  That's a tier constraint, not a code problem.
 - **Occasional loose matches survive** in the Confirmed bucket, and alias
   consolidation sometimes picks a version-specific canonical name
   ("GPT-4" over "GPT"). Counts stay correct; labels are imperfect.

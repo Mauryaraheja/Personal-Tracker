@@ -9,8 +9,8 @@ on every interaction (typing, clicking, uploading). Without state, the skills
 list generated in step 1 would vanish by the time the user reaches step 3.
 
 Skills and progress are persisted in SQLite (see tracker.py) -- the first time
-a role is tracked it costs a Groq/Tavily call, every visit after that is a
-local database read.
+a role is tracked it costs three API requests (two Groq, one Tavily); every
+visit after that is a local database read.
 """
 
 import streamlit as st
