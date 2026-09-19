@@ -108,14 +108,19 @@ def build_roadmap(refined_role: str) -> list[dict]:
 
     raw_text = response.choices[0].message.content
 
+        # Fail loudly instead of returning []. An empty list looks exactly like
+    # "no skills" to every caller: tracker.py would save nothing and
+    # app.py would quietly hide the section, with no error at all.
+    # Raising lets app.py show its error message, and rolls back
+    # get_or_create_roadmap's transaction so nothing half-saved remains.
     try:
         data = json.loads(raw_text)
-    except json.JSONDecodeError:
-        print("The model didn't return valid JSON. Raw response:")
-        print(raw_text)
-        return []
+    except json.JSONDecodeError as err:
+        raise ValueError(f"Groq's roadmap reply wasn't JSON: {raw_text[:200]!r}") from err
 
-    skills = data.get("skills", [])
+    skills = data.get("skills")
+    if not isinstance(skills, list) or not skills:
+        raise ValueError(f"Groq's roadmap reply had no list of skills: {raw_text[:200]!r}")
 
     for i, skill in enumerate(skills, start=1):
         skill["id"] = f"skl_{i:03d}"
