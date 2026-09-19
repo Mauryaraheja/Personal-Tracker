@@ -426,3 +426,100 @@ def test_market_check_uses_the_title_it_is_given_without_asking_groq(monkeypatch
     mv.get_market_validation("Generative AI Engineer", ROADMAP)
 
     assert searched_for == ["Generative AI Engineer"]
+
+
+# ---------------------------------------------------------------------------
+# compare_to_roadmap -- Python decides the buckets, not the model
+# ---------------------------------------------------------------------------
+
+TWO_ROADMAP_SKILLS = ROADMAP + [{"id": "skl_002", "name": "Prompt Engineering"}]
+
+
+def model_answers(monkeypatch, payload):
+    """Make compare_to_roadmap's one Groq call return `payload`."""
+    monkeypatch.setattr(mv, "groq_client", SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kw: groq_reply(payload)))
+    ))
+
+
+def test_a_skill_the_model_forgot_is_still_listed_as_not_confirmed(monkeypatch):
+    """The model confirmed one skill and simply left the other one out."""
+    model_answers(monkeypatch, {
+        "confirmed": [{"roadmap_skill_id": "skl_001", "roadmap_skill_name": "Vector Databases",
+                       "matched_market_skills": ["Chroma"]}],
+        "weak_signal": [],
+    })
+
+    result = mv.compare_to_roadmap(TWO_ROADMAP_SKILLS, MARKET)
+
+    assert [w["roadmap_skill_id"] for w in result["weak_signal"]] == ["skl_002"]
+
+
+def test_a_skill_is_never_both_confirmed_and_not_confirmed(monkeypatch):
+    model_answers(monkeypatch, {
+        "confirmed": [{"roadmap_skill_id": "skl_001", "roadmap_skill_name": "Vector Databases",
+                       "matched_market_skills": ["Chroma"]}],
+        "weak_signal": [{"roadmap_skill_id": "skl_001", "roadmap_skill_name": "Vector Databases"}],
+    })
+
+    result = mv.compare_to_roadmap(ROADMAP, MARKET)
+
+    assert result["weak_signal"] == []
+
+
+def test_a_confirmation_with_no_real_market_skill_is_dropped(monkeypatch):
+    """Confirmed by nothing real would read as 'mentioned in 0 of 12 postings'."""
+    model_answers(monkeypatch, {
+        "confirmed": [{"roadmap_skill_id": "skl_001", "roadmap_skill_name": "Vector Databases",
+                       "matched_market_skills": ["Nonexistent DB"]}],
+    })
+
+    result = mv.compare_to_roadmap(ROADMAP, MARKET)
+
+    assert result["confirmed"] == []
+    assert [w["roadmap_skill_id"] for w in result["weak_signal"]] == ["skl_001"]
+
+
+def test_a_confirmation_for_a_skill_not_in_the_roadmap_is_dropped(monkeypatch):
+    model_answers(monkeypatch, {
+        "confirmed": [{"roadmap_skill_id": "skl_999", "roadmap_skill_name": "Made Up",
+                       "matched_market_skills": ["Chroma"]}],
+    })
+
+    result = mv.compare_to_roadmap(ROADMAP, MARKET)
+
+    assert result["confirmed"] == []
+
+
+def test_a_suggested_skill_the_model_made_up_is_dropped(monkeypatch):
+    """It would otherwise show under 'Mentioned in only one posting'."""
+    model_answers(monkeypatch, {
+        "suggested_additions": [{"skill_name": "Made Up Tool"}, {"skill_name": "Pinecone"}],
+    })
+
+    result = mv.compare_to_roadmap(ROADMAP, MARKET)
+
+    assert [s["skill_name"] for s in result["suggested_additions"]] == ["Pinecone"]
+
+
+def test_a_skill_backing_a_confirmation_is_not_also_suggested(monkeypatch):
+    """Chroma confirms Vector Databases, so the roadmap isn't missing it."""
+    model_answers(monkeypatch, {
+        "confirmed": [{"roadmap_skill_id": "skl_001", "roadmap_skill_name": "Vector Databases",
+                       "matched_market_skills": ["Chroma"]}],
+        "suggested_additions": [{"skill_name": "Chroma"}, {"skill_name": "Pinecone"}],
+    })
+
+    result = mv.compare_to_roadmap(ROADMAP, MARKET)
+
+    assert [s["skill_name"] for s in result["suggested_additions"]] == ["Pinecone"]
+
+
+def test_a_suggested_skill_is_listed_only_once(monkeypatch):
+    model_answers(monkeypatch, {
+        "suggested_additions": [{"skill_name": "Pinecone"}, {"skill_name": "Pinecone"}],
+    })
+
+    result = mv.compare_to_roadmap(ROADMAP, MARKET)
+
+    assert [s["skill_name"] for s in result["suggested_additions"]] == ["Pinecone"]

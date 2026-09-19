@@ -452,23 +452,55 @@ def compare_to_roadmap(roadmap_skills: list[dict], market_skills: list[dict]) ->
 
     market_by_name = {m["skill_name"]: m for m in market_skills}
 
+
+    roadmap_ids = {s["id"] for s in roadmap_skills}
+
+    # The model proposes matches; Python decides what counts. A confirmed
+    # skill must be a real roadmap skill backed by at least one real
+    # market skill -- names the model invented contribute nothing.
+    confirmed = []
     for item in data.get("confirmed", []):
+        real_names = [n for n in item.get("matched_market_skills", []) if n in market_by_name]
+        if item.get("roadmap_skill_id") not in roadmap_ids or not real_names:
+            continue
         urls = set()
-        for name in item.get("matched_market_skills", []):
-            source = market_by_name.get(name)
-            if source:
-                urls.update(source["source_urls"])
+        for name in real_names:
+            urls.update(market_by_name[name]["source_urls"])
+        item["matched_market_skills"] = real_names
         item["mention_count"] = len(urls)
         item["source_urls"] = sorted(urls)
+        confirmed.append(item)
+    data["confirmed"] = confirmed
 
+    # "Not confirmed" is every roadmap skill that wasn't confirmed --
+    # worked out here instead of trusted from the model, so no skill can
+    # end up in neither list, or in both.
+    confirmed_ids = {item["roadmap_skill_id"] for item in confirmed}
+    data["weak_signal"] = [
+        {"roadmap_skill_id": s["id"], "roadmap_skill_name": s["name"]}
+        for s in roadmap_skills
+        if s["id"] not in confirmed_ids
+    ]
+
+    # Suggested additions get the same treatment. Keep a skill only if it
+    # really appears in the postings, isn't already backing a confirmed
+    # skill, and isn't listed twice -- otherwise a name the model made up
+    # would show under "Mentioned in only one posting".
+    taken = set()
+    for item in confirmed:
+        taken.update(item["matched_market_skills"])
+
+    suggested = []
     for item in data.get("suggested_additions", []):
-        source = market_by_name.get(item.get("skill_name"))
-        if source:
-            item["mention_count"] = source["mention_count"]
-            item["source_urls"] = source["source_urls"]
-
-    for key in ("confirmed", "suggested_additions", "weak_signal"):
-        data.setdefault(key, [])
+        name = item.get("skill_name")
+        source = market_by_name.get(name)
+        if source is None or name in taken:
+            continue
+        taken.add(name)
+        item["mention_count"] = source["mention_count"]
+        item["source_urls"] = source["source_urls"]
+        suggested.append(item)
+    data["suggested_additions"] = suggested
 
     return data
 
