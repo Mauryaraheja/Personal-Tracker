@@ -79,14 +79,17 @@ def get_skill_gaps(skills: list[dict], cv_text: str) -> list[dict]:
 
     raw_text = response.choices[0].message.content
 
+        # Same rule as build_roadmap: fail loudly instead of returning []. An
+    # empty list would make app.py quietly skip "Next Steps" -- the user
+    # would click Analyze Gaps, see nothing happen, and get no error.
     try:
         data = json.loads(raw_text)
-    except json.JSONDecodeError:
-        print("The model didn't return valid JSON. Raw response:")
-        print(raw_text)
-        return []
+    except json.JSONDecodeError as err:
+        raise ValueError(f"Groq's gap-analysis reply wasn't JSON: {raw_text[:200]!r}") from err
 
-    gaps = data.get("gaps", [])
+    gaps = data.get("gaps")
+    if not isinstance(gaps, list) or not gaps:
+        raise ValueError(f"Groq's gap-analysis reply had no list of gaps: {raw_text[:200]!r}")
 
     for i, gap in enumerate(gaps, start=1):
         gap["id"] = f"gap_{i:03d}"
