@@ -58,3 +58,52 @@ def test_a_reply_that_is_not_json_raises(monkeypatch):
 
     with pytest.raises(ValueError):
         gap_analysis.get_skill_gaps(SKILLS, "my CV text")
+
+
+# ---------------------------------------------------------------------------
+# Every skill gets exactly one gap -- the quiet version of the bug
+# ---------------------------------------------------------------------------
+
+TWO_SKILLS = SKILLS + [
+    {"id": "skl_002", "name": "Vector databases", "description": "Similarity search",
+     "level_required": "intermediate"},
+]
+
+
+def gap(skill_id):
+    return {"skill_id": skill_id, "status": "missing", "evidence_from_cv": None,
+            "suggestion": "Practise it"}
+
+
+def test_gaps_can_come_back_in_any_order(monkeypatch):
+    monkeypatch.setattr(gap_analysis, "groq_client", fake_groq(
+        {"gaps": [gap("skl_002"), gap("skl_001")]}
+    ))
+
+    gaps = gap_analysis.get_skill_gaps(TWO_SKILLS, "my CV text")
+
+    assert len(gaps) == 2
+
+
+def test_a_skipped_skill_raises(monkeypatch):
+    """Nothing crashes -- the skill would just vanish from Next Steps."""
+    monkeypatch.setattr(gap_analysis, "groq_client", fake_groq({"gaps": [gap("skl_001")]}))
+
+    with pytest.raises(ValueError):
+        gap_analysis.get_skill_gaps(TWO_SKILLS, "my CV text")
+
+
+def test_a_gap_for_an_unknown_skill_raises(monkeypatch):
+    monkeypatch.setattr(gap_analysis, "groq_client", fake_groq({"gaps": [gap("skl_999")]}))
+
+    with pytest.raises(ValueError):
+        gap_analysis.get_skill_gaps(SKILLS, "my CV text")
+
+
+def test_a_skill_covered_twice_raises(monkeypatch):
+    monkeypatch.setattr(gap_analysis, "groq_client", fake_groq(
+        {"gaps": [gap("skl_001"), gap("skl_001")]}
+    ))
+
+    with pytest.raises(ValueError):
+        gap_analysis.get_skill_gaps(SKILLS, "my CV text")

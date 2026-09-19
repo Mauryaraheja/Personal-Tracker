@@ -108,7 +108,7 @@ def build_roadmap(refined_role: str) -> list[dict]:
 
     raw_text = response.choices[0].message.content
 
-        # Fail loudly instead of returning []. An empty list looks exactly like
+    # Fail loudly instead of returning []. An empty list looks exactly like
     # "no skills" to every caller: tracker.py would save nothing and
     # app.py would quietly hide the section, with no error at all.
     # Raising lets app.py show its error message, and rolls back

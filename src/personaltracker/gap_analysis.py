@@ -79,7 +79,7 @@ def get_skill_gaps(skills: list[dict], cv_text: str) -> list[dict]:
 
     raw_text = response.choices[0].message.content
 
-        # Same rule as build_roadmap: fail loudly instead of returning []. An
+    # Same rule as build_roadmap: fail loudly instead of returning []. An
     # empty list would make app.py quietly skip "Next Steps" -- the user
     # would click Analyze Gaps, see nothing happen, and get no error.
     try:
@@ -91,6 +91,19 @@ def get_skill_gaps(skills: list[dict], cv_text: str) -> list[dict]:
     if not isinstance(gaps, list) or not gaps:
         raise ValueError(f"Groq's gap-analysis reply had no list of gaps: {raw_text[:200]!r}")
 
+
+    # One gap per roadmap skill -- no more, no fewer. A skill the model
+    # skipped would simply vanish from "Next Steps": the quiet version of
+    # the empty-list bug above.
+    expected_ids = {s["id"] for s in skills}
+    returned_ids = [g.get("skill_id") for g in gaps]
+    if len(returned_ids) != len(expected_ids) or set(returned_ids) != expected_ids:
+        raise ValueError(
+            f"Groq's gap analysis didn't cover each skill exactly once: "
+            f"expected {sorted(expected_ids)}, got {returned_ids}"
+        )
+
+    
     for i, gap in enumerate(gaps, start=1):
         gap["id"] = f"gap_{i:03d}"
 
