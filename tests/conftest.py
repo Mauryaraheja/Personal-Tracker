@@ -11,7 +11,9 @@ roadmap skills a match backs up. None of that is the model's job; it's
 plain Python, so it can be pinned down exactly.
 """
 
+import json
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -78,3 +80,22 @@ def fake_llm(monkeypatch):
     monkeypatch.setattr(tracker, "refine_role", recorder.refine)
     monkeypatch.setattr(tracker, "build_roadmap", recorder.build)
     return recorder
+
+
+@pytest.fixture
+def fake_groq():
+    """A stand-in for groq_client, shared by every test file.
+
+    It gives the test a function: fake_groq(reply) builds a fake client
+    that always answers with `reply` -- a dict (sent back as JSON), or a
+    plain string for replies that aren't valid JSON.
+    """
+
+    def build(reply):
+        content = reply if isinstance(reply, str) else json.dumps(reply)
+        message = SimpleNamespace(content=content)
+        return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(
+            create=lambda **kwargs: SimpleNamespace(choices=[SimpleNamespace(message=message)])
+        )))
+
+    return build

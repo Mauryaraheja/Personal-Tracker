@@ -2,7 +2,7 @@
 Streamlit UI for the AI Career Coach (Personal Tracker).
 
 Flow: Choose a Role -> Your Required Skills (with progress tracking) ->
-Upload Your CV -> Next Steps
+Upload Your CV -> Next Steps -> Market Insights -> Mock Interview
 
 Uses st.session_state because Streamlit reruns this entire script top-to-bottom
 on every interaction (typing, clicking, uploading). Without state, the skills
@@ -15,7 +15,9 @@ visit after that is a local database read.
 
 import streamlit as st
 from personaltracker import (
+    build_interview,
     extract_text_from_pdf,
+    grade_answer,
     get_skill_gaps,
     get_or_create_roadmap,
     get_market_validation,
@@ -48,6 +50,11 @@ DEFAULTS = {
     "cv_text": None,
     "gaps": None,
     "market_insights": None,
+    # The interview's questions, and a dict of grades keyed by question id.
+    # Grades start as None, not {}: reset_all() would hand the SAME dict
+    # back every time, so old grades would survive "Start Over".
+    "interview_questions": None,
+    "interview_grades": None,
     "uploader_key": 0,
 }
 
@@ -116,9 +123,12 @@ if st.button("Find Required Skills", type="primary"):
             st.session_state.role = role
             st.session_state.skills = skills
             st.session_state.tracker = tracker
-            # A new role invalidates any CV analysis run against the old skills.
+            # A new role invalidates anything worked out from the old skills.
             st.session_state.cv_text = None
             st.session_state.gaps = None
+            st.session_state.market_insights = None
+            st.session_state.interview_questions = None
+            st.session_state.interview_grades = None
         except Exception as e:
             st.error(
                 "Couldn't load the skill roadmap. If this is the first time "
@@ -308,3 +318,108 @@ if st.session_state.skills:
                 f"Based on {scanned} postings scanned via Tavily — a "
                 "directional signal, not a comprehensive market survey."
             )
+
+
+
+# ---------------------------------------------------------------------------
+# Section 6: Mock Interview
+# ---------------------------------------------------------------------------
+# Asks questions the way a real interviewer does -- about your CV first, then
+# the job you're applying for, then the role's skills -- and grades each
+# answer against a checklist of key points. One question at a time: the next
+# one only appears once the current one has been graded.
+MARK_ICONS = {"covered": "✅", "partly": "⚠️", "missed": "❌"}
+
+if st.session_state.skills:
+    st.divider()
+    st.header("Mock Interview")
+
+    if not st.session_state.cv_text:
+        st.caption("Tip: upload your CV and click Analyze Gaps above to get questions about your CV too.")
+
+    posting_text = st.text_area(
+        "Job description (optional)",
+        placeholder="Paste the job posting you're applying for",
+    )
+    skills_by_name = {s["name"]: s for s in st.session_state.skills}
+    chosen_names = st.multiselect(
+        "Skills to be asked about",
+        list(skills_by_name),
+        default=list(skills_by_name)[:2],
+    )
+    st.caption("Each skill costs one web search and one Groq call.")
+
+    if st.button("Start interview", type="primary"):
+        try:
+            with st.spinner("Preparing your questions..."):
+                questions = build_interview(
+                    st.session_state.cv_text,
+                    get_refined_title(st.session_state.role),
+                    posting_text,
+                    [skills_by_name[name] for name in chosen_names],
+                )
+        except Exception as e:
+            st.error(
+                "Couldn't prepare the interview. This is usually a Groq or Tavily "
+                "API issue (rate limit, network, or bad key) -- try again in a moment."
+            )
+            with st.expander("Technical details"):
+                st.exception(e)
+        else:
+            st.session_state.interview_questions = questions
+            st.session_state.interview_grades = {}
+
+    if st.session_state.interview_questions:
+        questions = st.session_state.interview_questions
+        grades = st.session_state.interview_grades
+        skill_names = {s["id"]: s["name"] for s in st.session_state.skills}
+
+        for question in questions:
+            with st.container(border=True):
+                # Where the question came from -- every question can show it.
+                if question["type"] == "cv":
+                    st.caption(f'About your CV: "{question["based_on"]}"')
+                elif question["type"] == "job_posting":
+                    st.caption(f'About the job posting: "{question["based_on"]}"')
+                elif question["source_url"]:
+                    st.caption(f"{skill_names.get(question['skill_id'], 'Skill')} -- "
+                               f"a real interview question from {question['source_url']}")
+                else:
+                    st.caption(f"{skill_names.get(question['skill_id'], 'Skill')} -- "
+                               "written by Groq, no matching question found online")
+                st.markdown(f"**{question['question']}**")
+
+                grade = grades.get(question["id"])
+                if grade is None:
+                    with st.form(key=f"form_{question['id']}"):
+                        answer = st.text_area("Your answer", key=f"answer_{question['id']}")
+                        submitted = st.form_submit_button("Submit answer")
+                    if submitted:
+                        try:
+                            with st.spinner("Grading your answer..."):
+                                new_grade = grade_answer(question, answer)
+                        except Exception as e:
+                            st.error(
+                                "Couldn't grade that answer. This is usually a Groq API "
+                                "issue -- try submitting again in a moment."
+                            )
+                            with st.expander("Technical details"):
+                                st.exception(e)
+                        else:
+                            grades[question["id"]] = new_grade
+                            st.rerun()  # show the grade and the next question
+                    break  # later questions stay hidden until this one is graded
+
+                st.markdown(f"> {grade['answer'] or '(no answer)'}")
+                st.markdown(f"**Score: {grade['score']:g} / {grade['max_score']}**")
+                for mark in grade["marks"]:
+                    line = f"{MARK_ICONS[mark['mark']]} {mark['key_point']}"
+                    if mark["evidence"]:
+                        line += f' -- you said: "{mark["evidence"]}"'
+                    st.write(line)
+                st.info(grade["feedback"])
+
+        if len(grades) == len(questions):
+            total = sum(g["score"] for g in grades.values())
+            out_of = sum(g["max_score"] for g in grades.values())
+            st.success(f"Interview finished -- total score {total:g} / {out_of}")
