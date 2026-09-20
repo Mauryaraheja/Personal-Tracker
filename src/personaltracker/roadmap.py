@@ -4,8 +4,9 @@ real, current info about the role, then have the LLM synthesize a
 structured, sourced skill list from those sources.
 """
 
-import json
-from .clients import groq_client, tavily_client
+from .clients import tavily_client
+from .llm import ask_groq, ask_groq_for_json
+from .models import RoadmapReply
 
 
 def refine_role(role: str) -> str:
@@ -26,11 +27,7 @@ def refine_role(role: str) -> str:
 
     Respond with ONLY the job title, nothing else.
     """
-    response = groq_client.chat.completions.create(
-        model="openai/gpt-oss-120b",
-        messages=[{"role": "user", "content": prompt}],
-    )
-    refined = response.choices[0].message.content.strip()
+    refined = ask_groq(prompt).strip()
     return refined if refined else role
 
 
@@ -99,28 +96,14 @@ def build_roadmap(refined_role: str) -> list[dict]:
 
     Respond with JSON only, no extra text.
     """
-
-    response = groq_client.chat.completions.create(
-        model="openai/gpt-oss-120b",
-        messages=[{"role": "user", "content": prompt}],
-        response_format={"type": "json_object"},
-    )
-
-    raw_text = response.choices[0].message.content
+    data = ask_groq_for_json(prompt, "roadmap")
 
     # Fail loudly instead of returning []. An empty list looks exactly like
     # "no skills" to every caller: tracker.py would save nothing and
     # app.py would quietly hide the section, with no error at all.
     # Raising lets app.py show its error message, and rolls back
     # get_or_create_roadmap's transaction so nothing half-saved remains.
-    try:
-        data = json.loads(raw_text)
-    except json.JSONDecodeError as err:
-        raise ValueError(f"Groq's roadmap reply wasn't JSON: {raw_text[:200]!r}") from err
-
-    skills = data.get("skills")
-    if not isinstance(skills, list) or not skills:
-        raise ValueError(f"Groq's roadmap reply had no list of skills: {raw_text[:200]!r}")
+    skills = [skill.model_dump() for skill in RoadmapReply.model_validate(data).skills]
 
     for i, skill in enumerate(skills, start=1):
         skill["id"] = f"skl_{i:03d}"

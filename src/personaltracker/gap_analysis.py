@@ -8,8 +8,8 @@ lets the model reason across the whole CV consistently. Worth revisiting
 if the roadmap ever grows much larger.
 """
 
-import json
-from .clients import groq_client
+from .llm import ask_groq_for_json
+from .models import GapsReply
 
 
 def format_skills_for_prompt(skills: list[dict]) -> str:
@@ -71,32 +71,19 @@ def get_skill_gaps(skills: list[dict], cv_text: str) -> list[dict]:
     Respond with JSON only, no extra text.
     """
 
-    response = groq_client.chat.completions.create(
-        model="openai/gpt-oss-120b",
-        messages=[{"role": "user", "content": prompt}],
-        response_format={"type": "json_object"},
-    )
-
-    raw_text = response.choices[0].message.content
+    data = ask_groq_for_json(prompt, "gap-analysis")
 
     # Same rule as build_roadmap: fail loudly instead of returning []. An
     # empty list would make app.py quietly skip "Next Steps" -- the user
     # would click Analyze Gaps, see nothing happen, and get no error.
-    try:
-        data = json.loads(raw_text)
-    except json.JSONDecodeError as err:
-        raise ValueError(f"Groq's gap-analysis reply wasn't JSON: {raw_text[:200]!r}") from err
-
-    gaps = data.get("gaps")
-    if not isinstance(gaps, list) or not gaps:
-        raise ValueError(f"Groq's gap-analysis reply had no list of gaps: {raw_text[:200]!r}")
+    gaps = [gap.model_dump() for gap in GapsReply.model_validate(data).gaps]
 
 
     # One gap per roadmap skill -- no more, no fewer. A skill the model
     # skipped would simply vanish from "Next Steps": the quiet version of
     # the empty-list bug above.
     expected_ids = {s["id"] for s in skills}
-    returned_ids = [g.get("skill_id") for g in gaps]
+    returned_ids = [g["skill_id"] for g in gaps]
     if len(returned_ids) != len(expected_ids) or set(returned_ids) != expected_ids:
         raise ValueError(
             f"Groq's gap analysis didn't cover each skill exactly once: "

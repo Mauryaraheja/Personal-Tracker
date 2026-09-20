@@ -25,9 +25,10 @@ scraping them directly.
 """
 
 import json
-from .clients import groq_client, tavily_client
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import time
+from .clients import tavily_client
+from .llm import ask_groq_for_json
+from .models import PostingSkillsReply, SkillGroupsReply
+from .text import normalize_url
 
 DEBUG = False
 
@@ -97,8 +98,7 @@ def search_job_postings(role: str, per_domain: int = 4, max_total: int = 12) -> 
     seen = set()
     deduped = []
     for r in interleaved:
-        url = r.get("url", "")
-        normalized = url.split("://", 1)[-1].split("?")[0].rstrip("/")
+        normalized = normalize_url(r.get("url", ""))
         if normalized not in seen:
             seen.add(normalized)
             deduped.append(r)
@@ -175,35 +175,28 @@ def extract_skills_from_posting(role: str, posting: dict) -> list[str]:
         ]
     }}
     """
-    # Rate-limit errors are retried inside groq_client itself (see
-    # clients.py), so one call is all this needs.
-    response = groq_client.chat.completions.create(
-        model="openai/gpt-oss-120b",
-        messages=[{"role": "user", "content": prompt}],
-        response_format={"type": "json_object"},
-    )
-
-    raw = response.choices[0].message.content
-
     if DEBUG:
         print("=" * 80)
         print(posting.get("url"))
         print(posting.get("content", "")[:5000])
         print("=" * 80)
 
-    if DEBUG:
-        print("\n========== RAW SKILL EXTRACTION ==========")
-        print(raw)
-        print("=========================================\n")
-
+    # Rate-limit errors are retried inside groq_client itself (see
+    # clients.py), so one call is all this needs. One unreadable reply
+    # shouldn't kill the whole check, so this posting is skipped instead.
     try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        print("Invalid JSON while extracting posting skills.")
-        print(raw)
+        data = ask_groq_for_json(prompt, "posting skills")
+        skills = PostingSkillsReply.model_validate(data).skills
+    except ValueError as err:
+        print(f"Couldn't read the skills from this posting: {err}")
         return []
 
-    return data.get("skills", [])
+    if DEBUG:
+        print("\n========== SKILL EXTRACTION ==========")
+        print(skills)
+        print("======================================\n")
+
+    return skills
 
 def consolidate_skill_mentions(raw_mentions: list[dict]) -> list[dict]:
     """
@@ -264,22 +257,14 @@ def consolidate_skill_mentions(raw_mentions: list[dict]) -> list[dict]:
     {json.dumps(unique_skills, indent=2)}
     """
 
-    response = groq_client.chat.completions.create(
-        model="openai/gpt-oss-120b",
-        messages=[{"role": "user", "content": prompt}],
-        response_format={"type": "json_object"},
-        max_tokens=8000
-    )
-
-    raw = response.choices[0].message.content
-
     try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        print(raw)
+        data = ask_groq_for_json(prompt, "skill grouping", max_tokens=8000)
+        groups = SkillGroupsReply.model_validate(data).skill_groups
+    except ValueError as err:
+        print(err)
         return []
 
-    return data.get("skill_groups", [])
+    return [group.model_dump() for group in groups]
 
 
 def extract_market_skills(role: str, postings: list[dict], progress_callback=None) -> list[dict]:
@@ -435,19 +420,10 @@ def compare_to_roadmap(roadmap_skills: list[dict], market_skills: list[dict]) ->
     Respond with JSON only, no extra text.
     """
 
-    response = groq_client.chat.completions.create(
-        model="openai/gpt-oss-120b",
-        messages=[{"role": "user", "content": prompt}],
-        response_format={"type": "json_object"},
-    )
-
-    raw_text = response.choices[0].message.content
-
     try:
-        data = json.loads(raw_text)
-    except json.JSONDecodeError:
-        print("The model didn't return valid JSON. Raw response:")
-        print(raw_text)
+        data = ask_groq_for_json(prompt, "market comparison")
+    except ValueError as err:
+        print(err)
         return {"confirmed": [], "suggested_additions": [], "weak_signal": []}
 
     market_by_name = {m["skill_name"]: m for m in market_skills}
