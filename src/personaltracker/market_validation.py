@@ -107,6 +107,31 @@ def search_job_postings(role: str, per_domain: int = 4, max_total: int = 12) -> 
 
     return deduped[:max_total]
 
+
+def was_fetched(posting: dict) -> bool:
+    """True when Tavily actually retrieved the page behind this result.
+
+    When raw_content comes back empty we are holding Tavily's search
+    snippet -- a summary of the page, not the page itself.
+    extract_skills_from_posting falls back to it silently, the model
+    reads a sentence or two and honestly reports no technologies, and
+    that answer is then counted as a posting that asked for nothing.
+    Every mention_count drops, and compare_to_roadmap calls real skills
+    unconfirmed. "We could not read this posting" and "this posting
+    mentions no technologies" are different claims; only the second one
+    belongs in the results.
+
+    Deliberately NOT extended to pages whose requirement headings came
+    back empty. Tavily does strip the bullet lists out of some postings,
+    and skipping those looks like the same fix -- but a real xAI backend
+    posting had every bullet stripped and still named Rust, C++ and Go
+    in its opening paragraph. Whether a page contains skills is the
+    model's judgement. Whether the page arrived at all is a fact, and
+    only the fact belongs in Python.
+    """
+    return bool((posting.get("raw_content") or "").strip())
+
+
 def extract_skills_from_posting(role: str, posting: dict) -> list[str]:
     """
     Extract technical skills from ONE job posting.
@@ -505,9 +530,27 @@ def get_market_validation(refined_role: str, roadmap_skills: list[dict], progres
             "total_postings_scanned": 0,
         }
 
-    market_skills = extract_market_skills(refined_role, postings, progress_callback=progress_callback)
+    readable = [p for p in postings if was_fetched(p)]
+    skipped = len(postings) - len(readable)
+    if skipped:
+        print(
+            f"Skipping {skipped} posting(s) Tavily could not fetch -- only a "
+            "search snippet came back, which is not the posting."
+        )
+
+    if not readable:
+        # Postings were found but none of their pages could be read, so
+        # there is nothing to compare the roadmap against. Raise instead
+        # of returning empty lists: an empty result is indistinguishable
+        # from "the market asks for nothing".
+        raise ValueError(
+            f"Found {len(postings)} postings but could not fetch any of their "
+            "pages -- the market check has nothing to read."
+        )
+
+    market_skills = extract_market_skills(refined_role, readable, progress_callback=progress_callback)
     comparison = compare_to_roadmap(roadmap_skills, market_skills)
     comparison["market_skills"] = market_skills
-    comparison["total_postings_scanned"] = len(postings)
+    comparison["total_postings_scanned"] = len(readable)
 
     return comparison
