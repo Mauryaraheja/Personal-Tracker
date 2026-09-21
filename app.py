@@ -86,6 +86,26 @@ def _on_status_change(role, skill_id, widget_key):
             break
 
 
+def mention_band(count: int) -> str:
+    """Describe how widely a skill was mentioned, without quoting a total.
+
+    The denominator was never trustworthy. Some postings come back from
+    Tavily with their requirement bullets stripped, so a phrase like
+    "3 of 12" silently counted pages we never actually read. A band keeps
+    the signal that matters -- common versus rare -- and drops precision
+    the data doesn't support.
+    """
+    if count >= 4:
+        return "mentioned across many postings"
+    if count >= 2:
+        return "mentioned in a few postings"
+    if count == 1:
+        return "mentioned once"
+    # No usable count. Say nothing about frequency rather than invent a
+    # number -- a missing field must not render as "mentioned once".
+    return "mentioned in these postings"
+
+
 st.title("NextRole")
 
 with st.sidebar:
@@ -274,6 +294,10 @@ if st.session_state.skills:
 
     if st.session_state.market_insights:
         insights = st.session_state.market_insights
+        # Kept for the empty-state check below, deliberately never shown.
+        # A posting total reads as evidence ("3 of 12"), but some of those
+        # pages arrive from Tavily with their requirement bullets stripped,
+        # so the total counts pages we failed to read. See mention_band().
         scanned = insights.get("total_postings_scanned", 0)
 
         if scanned == 0:
@@ -285,9 +309,8 @@ if st.session_state.skills:
                     matched = ", ".join(item.get("matched_market_skills", []))
                     st.write(
                         f"**{item['roadmap_skill_name']}** — matched {matched}, "
-                        f"mentioned in {item.get('mention_count', 0)} of {scanned} postings"
+                        f"{mention_band(item.get('mention_count', 0))}"
                     )
-            
 
             if insights.get("suggested_additions"):
                 st.subheader("➕ Suggested additions")
@@ -299,8 +322,8 @@ if st.session_state.skills:
 
                 for item in sorted(strong, key=lambda a: -a.get("mention_count", 0)):
                     st.write(
-                        f"**{item['skill_name']}** — mentioned in "
-                        f"{item['mention_count']} of {scanned} postings"
+                        f"**{item['skill_name']}** — "
+                        f"{mention_band(item['mention_count'])}"
                     )
 
                 if weak:
@@ -308,15 +331,9 @@ if st.session_state.skills:
                         for item in weak:
                             st.write(item["skill_name"])
 
-            if insights.get("weak_signal"):
-                st.subheader("⚪ Not confirmed by this batch")
-                st.caption("Not necessarily wrong -- postings often skip foundational or assumed skills")
-                for item in insights["weak_signal"]:
-                    st.write(f"**{item['roadmap_skill_name']}**")
-
             st.caption(
-                f"Based on {scanned} postings scanned via Tavily — a "
-                "directional signal, not a comprehensive market survey."
+                "A directional signal from live job postings, not a "
+                "comprehensive market survey."
             )
 
 
