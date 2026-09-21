@@ -24,13 +24,14 @@ would undo the whole point of caching roadmaps in the first place. So the
 answer is looked up once and then remembered here.
 """
 
+import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 from .roadmap import build_roadmap, refine_role
-from .text import normalize_text
+from .text import normalize_text, normalize_url
 
 # src/personaltracker/tracker.py -> parent -> parent -> parent = repo root
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "personaltracker.db"
@@ -113,7 +114,75 @@ def init_db() -> None:
                 role_key TEXT NOT NULL,
                 refined_title TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS posting_skills (
+                url TEXT PRIMARY KEY,
+                skills TEXT NOT NULL,
+                prompt_version TEXT NOT NULL,
+                cached_at TEXT NOT NULL
+            );
             """
+        )
+
+
+def get_cached_posting_skills(urls: list[str], prompt_version: str) -> dict[str, list[str]]:
+    """Return {url: skills} for postings already read under this prompt.
+
+    A job posting is a fixed document -- unlike a roadmap, which is the
+    model's opinion, this is just "what does this page say". Reading the
+    same page twice costs a Groq call and cannot give a better answer,
+    so the answer is kept.
+
+    Keyed by normalize_url, because Tavily hands the same posting back
+    as http:// and https://, with and without a query string, and with
+    different capitalisation -- one run returned .../MachinaLabs/... and
+    the next .../machinalabs/.... Keying on the raw URL would miss and
+    re-pay for a page already read.
+
+    A row written under a different prompt_version is ignored, not
+    returned. The extraction prompt is what decides what counts as a
+    skill, so an answer from an older one is not an answer to the
+    current question. Without this, improving the prompt would change
+    nothing for any posting already cached -- the same trap that makes
+    saved roadmaps impossible to fix without deleting the database.
+
+    Keys come back spelled as the caller passed them, so callers can
+    look up their own postings without normalizing first.
+    """
+    init_db()
+    by_key = {normalize_url(u): u for u in urls}
+    if not by_key:
+        return {}
+
+    placeholders = ",".join("?" * len(by_key))  # built from a count, never from input
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""SELECT url, skills FROM posting_skills
+                WHERE url IN ({placeholders}) AND prompt_version = ?""",
+            (*by_key, prompt_version),
+        ).fetchall()
+
+    return {by_key[row["url"]]: json.loads(row["skills"]) for row in rows}
+
+
+def save_posting_skills(url: str, skills: list[str], prompt_version: str) -> None:
+    """Remember what one posting asked for, under the prompt that read it.
+
+    INSERT OR REPLACE keyed on the URL, so re-reading a page under a new
+    prompt version replaces the old answer instead of leaving two rows
+    claiming different things about one page.
+    """
+    init_db()
+    with _connect() as conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO posting_skills (url, skills, prompt_version, cached_at)
+               VALUES (?, ?, ?, ?)""",
+            (
+                normalize_url(url),
+                json.dumps(skills),
+                prompt_version,
+                datetime.now(timezone.utc).isoformat(),
+            ),
         )
 
 

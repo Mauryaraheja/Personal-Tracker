@@ -14,21 +14,23 @@ This runs as an explicit, separate action instead (see app.py).
 Searches trusted job-posting sources (currently Greenhouse, Lever, Ashby,
 Workable, and Wellfound) to minimize blog articles and hiring guides
 while keeping the results focused on real job descriptions. Wellfound
-hosts both genuine single postings (/jobs/{id}) and aggregator/category
-pages (/role/r/{slug}) on the same domain -- the aggregator shape is
-filtered out by URL path below, since include_domains only restricts by
-domain and can't distinguish the two.
+hosts both genuine single postings (/jobs/{id}) and multi-role listing
+pages on the same domain -- those are filtered out by URL path below,
+since include_domains only restricts by domain and can't distinguish
+the two. See is_single_posting for why it names what to keep.
 
 LinkedIn and Glassdoor are deliberately excluded -- having Tavily fetch
 their pages on our behalf raises the same ToS/consent problem as
 scraping them directly.
 """
 
+import hashlib
 import json
 from .clients import tavily_client
 from .llm import ask_groq_for_json
 from .models import PostingSkillsReply, SkillGroupsReply
 from .text import normalize_url
+from .tracker import get_cached_posting_skills, save_posting_skills
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 
@@ -41,6 +43,30 @@ MARKET_DOMAINS = [
     "apply.workable.com",
     "wellfound.com"
 ]
+
+
+def is_single_posting(url: str) -> bool:
+    """True unless this is one of Wellfound's multi-role listing pages.
+
+    Wellfound serves real postings and listing pages from the same
+    domain, so include_domains cannot tell them apart -- only the path
+    can. This used to name the shapes to exclude, starting with
+    /role/r/{slug}. That leaks: /hire/{slug} came back from a Backend
+    Engineer search as a 19,678-character marketing page and put
+    PyTorch, TensorFlow, Scikit-learn, Hadoop and Power BI into the
+    market skills for a backend role. A listing page is not evidence
+    about one job, and its skills are counted as if it were.
+
+    Naming what to keep means a listing shape nobody has seen yet is
+    excluded by default. The trade: if Wellfound changes its posting
+    URLs we lose Wellfound, instead of quietly filling up with the
+    wrong roles -- and the other four boards still answer.
+
+    Every other domain is left alone; they serve one posting per URL.
+    """
+    if "wellfound.com" not in url:
+        return True
+    return "/jobs/" in url
 
 
 def search_job_postings(role: str, per_domain: int = 4, max_total: int = 12) -> list[dict]:
@@ -93,9 +119,7 @@ def search_job_postings(role: str, per_domain: int = 4, max_total: int = 12) -> 
             if i < len(domain_results):
                 interleaved.append(domain_results[i])
 
-    interleaved = [
-        r for r in interleaved if "wellfound.com/role/" not in r.get("url", "")
-    ]
+    interleaved = [r for r in interleaved if is_single_posting(r.get("url", ""))]
 
     seen = set()
     deduped = []
@@ -132,15 +156,7 @@ def was_fetched(posting: dict) -> bool:
     return bool((posting.get("raw_content") or "").strip())
 
 
-def extract_skills_from_posting(role: str, posting: dict) -> list[str]:
-    """
-    Extract technical skills from ONE job posting.
-    Returns only skill names.
-    """
-
-    text = posting.get("raw_content") or posting.get("content", "")
-
-    prompt = f"""
+EXTRACTION_PROMPT = """
     The text below is ONE real job posting for the role: {role}.
 
     Read the job description carefully and identify every technical skill,
@@ -149,10 +165,10 @@ def extract_skills_from_posting(role: str, posting: dict) -> list[str]:
     or technology that is explicitly mentioned.
 
     URL:
-    {posting.get("url")}
+    {url}
 
     Content:
-    {text[:4000]}
+    {text}
 
     Examples of the kinds of skills to extract include:
     - Python
@@ -202,6 +218,26 @@ def extract_skills_from_posting(role: str, posting: dict) -> list[str]:
         ]
     }}
     """
+
+# The prompt decides what counts as a skill, so it is also the version of
+# every cached answer. Deriving the version from the text means editing the
+# prompt retires the old answers automatically -- nobody has to remember to
+# bump a number, and no posting can be served an answer to a question we no
+# longer ask.
+EXTRACTION_VERSION = hashlib.sha256(EXTRACTION_PROMPT.encode()).hexdigest()[:12]
+
+
+def extract_skills_from_posting(role: str, posting: dict) -> list[str]:
+    """
+    Extract technical skills from ONE job posting.
+    Returns only skill names.
+    """
+
+    text = posting.get("raw_content") or posting.get("content", "")
+
+    prompt = EXTRACTION_PROMPT.format(
+        role=role, url=posting.get("url"), text=text[:4000]
+    )
     if DEBUG:
         print("=" * 80)
         print(posting.get("url"))
@@ -304,9 +340,24 @@ def extract_market_skills(role: str, postings: list[dict], progress_callback=Non
     raw_mentions = []
     completed = 0
 
+    # A job posting is a fixed document, so one already read under this
+    # prompt needs no Groq call -- and no place in the queue below, which
+    # means it costs none of the 4-second spacing either.
+    cached = get_cached_posting_skills([p["url"] for p in postings], EXTRACTION_VERSION)
+    unread = [p for p in postings if p["url"] not in cached]
+    if cached:
+        print(f"Reusing {len(cached)} posting(s) read before; {len(unread)} left to read.")
+
+    for url, skills in cached.items():
+        completed += 1
+        if progress_callback:
+            progress_callback(completed, len(postings))
+        for skill in skills:
+            raw_mentions.append({"skill_name": skill, "source_url": url})
+
     with ThreadPoolExecutor(max_workers=2) as executor:
         future_to_posting = {}
-        for i, posting in enumerate(postings):
+        for i, posting in enumerate(unread):
             if i > 0:
                 time.sleep(4)  # spread calls out to stay under the per-minute token ceiling
             future_to_posting[executor.submit(extract_skills_from_posting, role, posting)] = posting
@@ -318,6 +369,16 @@ def extract_market_skills(role: str, postings: list[dict], progress_callback=Non
                 progress_callback(completed, len(postings))
 
             skills = future.result()
+
+            # Only remember a posting that produced something.
+            # extract_skills_from_posting also returns [] when a reply
+            # could not be read, and the two cases are indistinguishable
+            # from here -- caching an empty result would turn one bad
+            # reply into a permanent "this posting asks for nothing".
+            # Re-reading a genuinely empty posting is cheap; remembering
+            # a failure forever is not.
+            if skills:
+                save_posting_skills(posting["url"], skills, EXTRACTION_VERSION)
 
             if DEBUG:
                 print(f"\n{posting['url']}")

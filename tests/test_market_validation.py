@@ -125,6 +125,44 @@ def test_wellfound_aggregator_pages_are_excluded(monkeypatch):
     assert [r["url"] for r in results] == ["https://wellfound.com/jobs/12345-ai-engineer"]
 
 
+def test_wellfound_listing_pages_are_excluded_whatever_their_path(monkeypatch):
+    """/role/r/ was not the only listing shape. A Backend Engineer search
+    returned /hire/back-end-developers -- a marketing page that put
+    PyTorch, TensorFlow and Power BI into a backend role's market skills.
+    Only /jobs/ is one posting about one job, so that is what we keep."""
+    monkeypatch.setattr(mv, "tavily_client", FakeTavily({
+        "wellfound.com": [
+            posting("https://wellfound.com/hire/back-end-developers"),
+            posting("https://wellfound.com/role/r/backend-engineer"),
+            posting("https://wellfound.com/company/acme/openings"),
+            posting("https://wellfound.com/jobs/4584948-backend-engineer"),
+        ],
+    }))
+
+    results = mv.search_job_postings("Backend Engineer")
+
+    assert [r["url"] for r in results] == [
+        "https://wellfound.com/jobs/4584948-backend-engineer"
+    ]
+
+
+def test_other_boards_are_not_path_filtered(monkeypatch):
+    """The /jobs/ rule is about Wellfound only. Greenhouse, Lever, Ashby
+    and Workable serve one posting per URL, so their paths are left
+    alone -- Lever's, for instance, carries no /jobs/ segment at all."""
+    monkeypatch.setattr(mv, "tavily_client", FakeTavily({
+        "lever.co": [posting("https://jobs.lever.co/acme/abc-123")],
+        "jobs.ashbyhq.com": [posting("https://jobs.ashbyhq.com/acme/def-456")],
+    }))
+
+    results = mv.search_job_postings("Backend Engineer")
+
+    assert [r["url"] for r in results] == [
+        "https://jobs.lever.co/acme/abc-123",
+        "https://jobs.ashbyhq.com/acme/def-456",
+    ]
+
+
 def test_results_are_interleaved_across_domains(monkeypatch):
     """A pooled search is dominated by whichever board has most content.
     Interleaving is what guarantees the smaller boards appear at all."""
@@ -282,6 +320,75 @@ def test_progress_callback_reports_each_posting(monkeypatch, no_sleep):
     )
 
     assert seen == [(1, 3), (2, 3), (3, 3)]
+
+
+# ---------------------------------------------------------------------------
+# extract_market_skills -- the posting cache
+# ---------------------------------------------------------------------------
+
+def counting_extraction(monkeypatch, skills, calls):
+    def extract(role, p, **kw):
+        calls.append(p["url"])
+        return list(skills)
+
+    monkeypatch.setattr(mv, "extract_skills_from_posting", extract)
+    monkeypatch.setattr(mv, "consolidate_skill_mentions", lambda mentions: [])
+
+
+def test_a_posting_read_before_is_not_sent_to_groq_again(monkeypatch, no_sleep):
+    """A job posting is a fixed document, unlike a roadmap, which is the
+    model's opinion. Reading the same page twice costs a call and cannot
+    produce a better answer."""
+    calls = []
+    counting_extraction(monkeypatch, ["Python", "Docker"], calls)
+
+    mv.extract_market_skills("Gen AI", [posting("https://x.com/jobs/1")])
+    again = mv.extract_market_skills("Gen AI", [posting("https://x.com/jobs/1")])
+
+    assert calls == ["https://x.com/jobs/1"]
+    assert {s["skill_name"] for s in again} == {"Python", "Docker"}
+    assert {s["mention_count"] for s in again} == {1}
+
+
+def test_the_cache_ignores_http_https_and_capitalisation(monkeypatch, no_sleep):
+    """Tavily returns the same posting under http:// and https://, and one
+    run gave .../MachinaLabs/... where the next gave .../machinalabs/....
+    Keying on the raw URL would re-pay for a page already read."""
+    calls = []
+    counting_extraction(monkeypatch, ["Rust"], calls)
+
+    mv.extract_market_skills("Gen AI", [posting("https://jobs.lever.co/MachinaLabs/7")])
+    mv.extract_market_skills("Gen AI", [posting("http://jobs.lever.co/machinalabs/7/")])
+
+    assert calls == ["https://jobs.lever.co/MachinaLabs/7"]
+
+
+def test_changing_the_prompt_retires_the_cached_answers(monkeypatch, no_sleep):
+    """The prompt decides what counts as a skill, so an answer written
+    under an older one is not an answer to the current question. Without
+    this, improving the prompt would change nothing already cached."""
+    calls = []
+    counting_extraction(monkeypatch, ["Go"], calls)
+
+    mv.extract_market_skills("Gen AI", [posting("https://x.com/jobs/1")])
+    monkeypatch.setattr(mv, "EXTRACTION_VERSION", "a-different-prompt")
+    mv.extract_market_skills("Gen AI", [posting("https://x.com/jobs/1")])
+
+    assert calls == ["https://x.com/jobs/1", "https://x.com/jobs/1"]
+
+
+def test_an_empty_result_is_never_cached(monkeypatch, no_sleep):
+    """extract_skills_from_posting returns [] both for a posting that
+    names no technology and for a reply it could not read. The two are
+    indistinguishable here, so caching one would turn a single bad reply
+    into a permanent "this posting asks for nothing"."""
+    calls = []
+    counting_extraction(monkeypatch, [], calls)
+
+    mv.extract_market_skills("Gen AI", [posting("https://x.com/jobs/1")])
+    mv.extract_market_skills("Gen AI", [posting("https://x.com/jobs/1")])
+
+    assert calls == ["https://x.com/jobs/1", "https://x.com/jobs/1"]
 
 
 # ---------------------------------------------------------------------------

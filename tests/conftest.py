@@ -27,6 +27,23 @@ os.environ.setdefault("TAVILY_API_KEY", "test-key-not-used")
 from personaltracker import tracker  # after the keys, or the import fails
 
 
+@pytest.fixture(autouse=True)
+def never_the_real_database(tmp_path, monkeypatch):
+    """Point every test at a throwaway database, not personaltracker.db.
+
+    The promise at the top of this file used to hold by accident: only
+    tracker.py talked to SQLite, and only tests that asked for the `db`
+    fixture reached it. Then the market check began caching postings, so
+    a test that merely runs an extraction writes rows -- and three of
+    them landed in the real personaltracker.db before this existed.
+
+    autouse makes the promise hold for tests that do not know they touch
+    the database at all. The `db` fixture below still works: it sets
+    DB_PATH again and runs init_db(), and the last setattr wins.
+    """
+    monkeypatch.setattr(tracker, "DB_PATH", tmp_path / "auto.db")
+
+
 @pytest.fixture
 def db(tmp_path, monkeypatch):
     """Point tracker at a throwaway database for one test.
