@@ -34,10 +34,16 @@ def groq_reply(payload):
 class FakeTavily:
     """Returns canned results per domain, or raises for chosen domains."""
 
-    def __init__(self, results_by_domain, failing_domains=()):
+    def __init__(self, results_by_domain, failing_domains=(), extracts=None,
+                 extract_fails=False):
         self.results_by_domain = results_by_domain
         self.failing_domains = set(failing_domains)
         self.queries = []
+        # what extract() can recover, keyed by url; and a record of what
+        # it was asked for, so a test can assert it wasn't called at all
+        self.extracts = extracts or {}
+        self.extract_fails = extract_fails
+        self.extracted = []
 
     def search(self, **kwargs):
         domain = kwargs["include_domains"][0]
@@ -45,6 +51,13 @@ class FakeTavily:
         if domain in self.failing_domains:
             raise RuntimeError(f"boom: {domain}")
         return {"results": self.results_by_domain.get(domain, [])}
+
+    def extract(self, urls, **kwargs):
+        self.extracted.append(list(urls))
+        if self.extract_fails:
+            raise RuntimeError("boom: extract")
+        return {"results": [{"url": u, "raw_content": self.extracts.get(u, "")}
+                            for u in urls]}
 
 
 def posting(url, raw_content="some job text"):
@@ -161,6 +174,51 @@ def test_other_boards_are_not_path_filtered(monkeypatch):
         "https://jobs.lever.co/acme/abc-123",
         "https://jobs.ashbyhq.com/acme/def-456",
     ]
+
+
+def test_a_page_the_search_returned_empty_is_fetched_again(monkeypatch):
+    """Tavily often returns raw_content blank for boards that build their
+    postings in the browser. A "Graphics Programmer" search lost 8 of 12
+    postings that way; extract() recovered most of them."""
+    fake = FakeTavily(
+        {"lever.co": [posting("https://jobs.lever.co/a/1", raw_content=""),
+                      posting("https://jobs.lever.co/a/2")]},
+        extracts={"https://jobs.lever.co/a/1": "Vulkan, DX12 and RenderDoc"},
+    )
+    monkeypatch.setattr(mv, "tavily_client", fake)
+
+    results = mv.search_job_postings("Graphics Programmer")
+
+    assert fake.extracted == [["https://jobs.lever.co/a/1"]]   # only the missing one
+    assert results[0]["raw_content"] == "Vulkan, DX12 and RenderDoc"
+    assert all(mv.was_fetched(r) for r in results)
+
+
+def test_nothing_is_re_fetched_when_every_page_arrived(monkeypatch):
+    """extract() costs credits, so it only runs when a page is missing."""
+    fake = FakeTavily({"lever.co": [posting("https://jobs.lever.co/a/1")]})
+    monkeypatch.setattr(mv, "tavily_client", fake)
+
+    mv.search_job_postings("Graphics Programmer")
+
+    assert fake.extracted == []
+
+
+def test_a_failed_re_fetch_still_returns_the_postings_that_arrived(monkeypatch):
+    """A failed repair is not a failed search -- the pages that did come
+    back are still worth checking, and was_fetched drops the rest."""
+    fake = FakeTavily(
+        {"lever.co": [posting("https://jobs.lever.co/a/1", raw_content=""),
+                      posting("https://jobs.lever.co/a/2")]},
+        extract_fails=True,
+    )
+    monkeypatch.setattr(mv, "tavily_client", fake)
+
+    results = mv.search_job_postings("Graphics Programmer")
+
+    assert [r["url"] for r in results] == ["https://jobs.lever.co/a/1",
+                                           "https://jobs.lever.co/a/2"]
+    assert [r["url"] for r in results if mv.was_fetched(r)] == ["https://jobs.lever.co/a/2"]
 
 
 def test_results_are_interleaved_across_domains(monkeypatch):

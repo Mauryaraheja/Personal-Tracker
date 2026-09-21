@@ -129,7 +129,60 @@ def search_job_postings(role: str, per_domain: int = 4, max_total: int = 12) -> 
             seen.add(normalized)
             deduped.append(r)
 
-    return deduped[:max_total]
+    return refetch_missing_pages(deduped[:max_total])
+
+
+def refetch_missing_pages(results: list[dict]) -> list[dict]:
+    """Ask Tavily to fetch the pages its own search returned empty.
+
+    A search result is supposed to carry the page text in raw_content,
+    but Tavily often returns it blank -- most often for boards that build
+    their postings in the browser. was_fetched then drops those postings,
+    which is correct (a search snippet is not the posting) but expensive:
+    a "Graphics Programmer" search lost 8 of its 12 postings that way and
+    left the market check reading four pages.
+
+    tavily.extract() is a separate endpoint with a different fetcher, and
+    it recovers most of them -- 8 of 11 on that same search, carrying
+    exactly the Vulkan, DX12, GLSL and RenderDoc detail those postings
+    were supposed to provide. extract_depth="advanced" is deliberate:
+    "basic" recovered only 6 of the same 8.
+
+    It costs credits, so it runs only when something is missing and only
+    for the URLs that are missing. Whatever it cannot recover is left
+    blank for was_fetched to drop, exactly as before.
+    """
+    missing = [r for r in results if not (r.get("raw_content") or "").strip()]
+    if not missing:
+        return results
+
+    try:
+        response = tavily_client.extract(
+            urls=[r.get("url", "") for r in missing],
+            format="text",
+            extract_depth="advanced",
+        )
+    except Exception as err:
+        # A failed repair is not a failed search. The postings that did
+        # arrive are still worth checking, and was_fetched drops the rest
+        # exactly as it did before this existed.
+        print(f"Couldn't re-fetch {len(missing)} missing page(s): {err}")
+        return results
+
+    recovered = {
+        r.get("url"): r.get("raw_content") or ""
+        for r in response.get("results", [])
+    }
+
+    filled = 0
+    for result in missing:
+        text = recovered.get(result.get("url"), "")
+        if text.strip():
+            result["raw_content"] = text
+            filled += 1
+
+    print(f"Re-fetched {filled} of {len(missing)} page(s) the search returned empty.")
+    return results
 
 
 def was_fetched(posting: dict) -> bool:
