@@ -28,7 +28,7 @@ import hashlib
 import json
 from .clients import tavily_client
 from .llm import ask_groq_for_json
-from .models import PostingSkillsReply, SkillGroupsReply
+from .models import BatchPostingSkillsReply, SkillGroupsReply
 from .text import normalize_url
 from .tracker import get_cached_posting_skills, save_posting_skills
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -157,18 +157,13 @@ def was_fetched(posting: dict) -> bool:
 
 
 EXTRACTION_PROMPT = """
-    The text below is ONE real job posting for the role: {role}.
+    Below are {count} real job postings for the role: {role}.
+    They are numbered. Read each one separately, on its own terms.
 
-    Read the job description carefully and identify every technical skill,
+    Read each job description carefully and identify every technical skill,
     framework, library, programming language, database, cloud platform,
     machine learning framework, analytics tool, infrastructure tool,
     or technology that is explicitly mentioned.
-
-    URL:
-    {url}
-
-    Content:
-    {text}
 
     Examples of the kinds of skills to extract include:
     - Python
@@ -208,15 +203,24 @@ EXTRACTION_PROMPT = """
     These are real terms, but they are not learnable technologies
     someone would add to a skill roadmap.
 
-    Return JSON only in the following format:
+    Never move a skill from one posting to another. A skill belongs to the
+    numbered posting whose text it was written in, and nowhere else.
+
+    Return JSON only in the following format, with one entry for EVERY
+    posting number from 1 to {count} -- including any posting that names
+    no technology at all, whose entry is an empty list:
 
     {{
-        "skills": [
-            "Python",
-            "Spark",
-            "AWS"
-        ]
+        "postings": {{
+            "1": [
+                "Python",
+                "Spark"
+            ],
+            "2": []
+        }}
     }}
+
+{blocks}
     """
 
 # The prompt decides what counts as a skill, so it is also the version of
@@ -226,40 +230,84 @@ EXTRACTION_PROMPT = """
 # longer ask.
 EXTRACTION_VERSION = hashlib.sha256(EXTRACTION_PROMPT.encode()).hexdigest()[:12]
 
+# How many postings share one Groq call. The instructions above are ~460
+# tokens and identical for every posting, so sending them once per posting
+# was most of the bill: nine postings cost 4,176 tokens of instructions to
+# read 5,643 tokens of job ads. Four per call cuts that to 1,392.
+# Bigger batches save more and risk more -- one unreadable reply loses the
+# whole batch, not one posting -- so this stays small enough that a loss
+# costs a few postings rather than the check.
+BATCH_SIZE = 4
 
-def extract_skills_from_posting(role: str, posting: dict) -> list[str]:
-    """
-    Extract technical skills from ONE job posting.
-    Returns only skill names.
-    """
 
-    text = posting.get("raw_content") or posting.get("content", "")
+def extract_skills_from_postings(role: str, postings: list[dict]) -> dict[str, list[str]]:
+    """Read several job postings in ONE Groq call. Returns {url: skills}.
+
+    The saving is the instructions, not the postings: they are the same
+    ~460 tokens every time, and this sends them once per batch instead of
+    once per posting.
+
+    What that costs is attribution. One call per posting made "which
+    posting said this" free -- it was whichever posting we sent. Sharing
+    a call means the model has to say it, which is bookkeeping, not
+    judgement, so Python keeps as much of it as it can: the model is
+    given numbers rather than URLs, and the reply is checked against the
+    numbers we actually sent. A posting the model skipped is reported and
+    left out, never guessed at, because a wrong guess would move a real
+    skill onto the wrong posting and change every count that follows.
+    """
+    blocks = []
+    for number, posting in enumerate(postings, start=1):
+        text = posting.get("raw_content") or posting.get("content", "")
+        blocks.append(
+            f"""    ===== POSTING {number} =====
+    URL:
+    {posting.get('url')}
+
+    Content:
+    {text[:4000]}
+
+"""
+        )
 
     prompt = EXTRACTION_PROMPT.format(
-        role=role, url=posting.get("url"), text=text[:4000]
+        role=role, count=len(postings), blocks="".join(blocks)
     )
+
     if DEBUG:
         print("=" * 80)
-        print(posting.get("url"))
-        print(posting.get("content", "")[:5000])
+        print([p.get("url") for p in postings])
         print("=" * 80)
 
     # Rate-limit errors are retried inside groq_client itself (see
-    # clients.py), so one call is all this needs. One unreadable reply
-    # shouldn't kill the whole check, so this posting is skipped instead.
+    # clients.py), so one call is all this needs. An unreadable reply
+    # shouldn't kill the whole check, so the batch is skipped instead --
+    # which is why BATCH_SIZE is small.
     try:
         data = ask_groq_for_json(prompt, "posting skills")
-        skills = PostingSkillsReply.model_validate(data).skills
+        reply = BatchPostingSkillsReply.model_validate(data).postings
     except ValueError as err:
-        print(f"Couldn't read the skills from this posting: {err}")
-        return []
+        print(f"Couldn't read the skills from a batch of {len(postings)} postings: {err}")
+        return {}
 
-    if DEBUG:
-        print("\n========== SKILL EXTRACTION ==========")
-        print(skills)
-        print("======================================\n")
+    # Coverage, the part the model cannot be trusted with. A number we
+    # never sent cannot belong to any posting; a number it skipped is a
+    # posting we have no answer for. Both are said out loud rather than
+    # folded silently into the counts.
+    expected = {str(n) for n in range(1, len(postings) + 1)}
+    missing = expected - reply.keys()
+    invented = reply.keys() - expected
+    if missing:
+        print(f"Groq gave no answer for posting(s) {sorted(missing)} of {len(postings)}.")
+    if invented:
+        print(f"Groq answered for posting(s) {sorted(invented)}, which were never sent.")
 
-    return skills
+    return {
+        postings[int(number) - 1]["url"]: skills
+        for number, skills in reply.items()
+        if number in expected
+    }
+
 
 def consolidate_skill_mentions(raw_mentions: list[dict]) -> list[dict]:
     """
@@ -355,37 +403,50 @@ def extract_market_skills(role: str, postings: list[dict], progress_callback=Non
         for skill in skills:
             raw_mentions.append({"skill_name": skill, "source_url": url})
 
+    # Postings share a call in groups of BATCH_SIZE. The instructions
+    # are the same for all of them, so sending them once per batch
+    # instead of once per posting is where the saving comes from.
+    batches = [unread[k:k + BATCH_SIZE] for k in range(0, len(unread), BATCH_SIZE)]
+
     with ThreadPoolExecutor(max_workers=2) as executor:
-        future_to_posting = {}
-        for i, posting in enumerate(unread):
+        future_to_batch = {}
+        for i, batch in enumerate(batches):
             if i > 0:
                 time.sleep(4)  # spread calls out to stay under the per-minute token ceiling
-            future_to_posting[executor.submit(extract_skills_from_posting, role, posting)] = posting
+            future_to_batch[executor.submit(extract_skills_from_postings, role, batch)] = batch
 
-        for future in as_completed(future_to_posting):
-            posting = future_to_posting[future]
-            completed += 1
-            if progress_callback:
-                progress_callback(completed, len(postings))
+        for future in as_completed(future_to_batch):
+            batch = future_to_batch[future]
+            skills_by_url = future.result()
 
-            skills = future.result()
+            # Walk the batch we sent, not the reply we got back. A
+            # posting the model skipped is already reported inside
+            # extract_skills_from_postings; here it simply contributes
+            # nothing, exactly as a single unreadable posting used to.
+            for posting in batch:
+                completed += 1
+                if progress_callback:
+                    progress_callback(completed, len(postings))
 
-            # Only remember a posting that produced something.
-            # extract_skills_from_posting also returns [] when a reply
-            # could not be read, and the two cases are indistinguishable
-            # from here -- caching an empty result would turn one bad
-            # reply into a permanent "this posting asks for nothing".
-            # Re-reading a genuinely empty posting is cheap; remembering
-            # a failure forever is not.
-            if skills:
-                save_posting_skills(posting["url"], skills, EXTRACTION_VERSION)
+                skills = skills_by_url.get(posting["url"], [])
 
-            if DEBUG:
-                print(f"\n{posting['url']}")
-                print(skills)
+                # Only remember a posting that produced something. A
+                # reply that could not be read also yields nothing
+                # here, and the two are indistinguishable -- caching
+                # an empty result would turn one bad reply into a
+                # permanent "this posting asks for nothing".
+                # Re-reading a genuinely empty posting is cheap;
+                # remembering a failure forever is not.
+                if skills:
+                    save_posting_skills(posting["url"], skills, EXTRACTION_VERSION)
 
-            for skill in skills:
-                raw_mentions.append({"skill_name": skill, "source_url": posting["url"]})
+                if DEBUG:
+                    print()
+                    print(posting["url"])
+                    print(skills)
+
+                for skill in skills:
+                    raw_mentions.append({"skill_name": skill, "source_url": posting["url"]})
 
 
     if DEBUG:

@@ -103,15 +103,26 @@ class SkillQuestionsReply(BaseModel):
     questions: Annotated[list[SkillQuestion], Field(min_length=1)]
 
 
-class PostingSkillsReply(BaseModel):
-    """The skills found in ONE job posting: names only, no counting.
+class BatchPostingSkillsReply(BaseModel):
+    """The skills found in SEVERAL postings at once, keyed by the number
+    each posting was given in the prompt.
+
+    Numbers, not URLs. Groq has mangled a cited URL before (dropping the
+    domain), and a mangled key would attach a posting's skills to nothing
+    -- or, worse, to the wrong posting, which quietly changes every
+    mention_count. A number the model only has to copy back is much
+    harder to get wrong, and Python keeps the number -> URL map.
+
+    Shape is checked here: a string key, a list of strings. Whether the
+    reply covers every posting that was actually sent is checked in
+    market_validation, where that list is in scope.
 
     An empty list is fine -- a posting can genuinely name nothing we can
     use -- but every entry has to be a string, because the market check
     lowercases and groups these names later.
     """
 
-    skills: list[str] = []
+    postings: dict[str, list[str]] = {}
 
 
 class SkillGroup(BaseModel):

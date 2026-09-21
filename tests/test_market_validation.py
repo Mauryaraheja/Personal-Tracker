@@ -225,8 +225,8 @@ def test_no_postings_found_returns_empty(monkeypatch):
 
 def stub_extraction(monkeypatch, skills_by_url, groups=()):
     monkeypatch.setattr(
-        mv, "extract_skills_from_posting",
-        lambda role, p, **kw: skills_by_url[p["url"]],
+        mv, "extract_skills_from_postings",
+        lambda role, batch, **kw: {p["url"]: skills_by_url[p["url"]] for p in batch},
     )
     monkeypatch.setattr(mv, "consolidate_skill_mentions", lambda mentions: list(groups))
 
@@ -327,11 +327,12 @@ def test_progress_callback_reports_each_posting(monkeypatch, no_sleep):
 # ---------------------------------------------------------------------------
 
 def counting_extraction(monkeypatch, skills, calls):
-    def extract(role, p, **kw):
-        calls.append(p["url"])
-        return list(skills)
+    def extract(role, batch, **kw):
+        for p in batch:
+            calls.append(p["url"])
+        return {p["url"]: list(skills) for p in batch}
 
-    monkeypatch.setattr(mv, "extract_skills_from_posting", extract)
+    monkeypatch.setattr(mv, "extract_skills_from_postings", extract)
     monkeypatch.setattr(mv, "consolidate_skill_mentions", lambda mentions: [])
 
 
@@ -378,7 +379,7 @@ def test_changing_the_prompt_retires_the_cached_answers(monkeypatch, no_sleep):
 
 
 def test_an_empty_result_is_never_cached(monkeypatch, no_sleep):
-    """extract_skills_from_posting returns [] both for a posting that
+    """extract_skills_from_postings returns nothing both for a posting that
     names no technology and for a reply it could not read. The two are
     indistinguishable here, so caching one would turn a single bad reply
     into a permanent "this posting asks for nothing"."""
@@ -389,6 +390,85 @@ def test_an_empty_result_is_never_cached(monkeypatch, no_sleep):
     mv.extract_market_skills("Gen AI", [posting("https://x.com/jobs/1")])
 
     assert calls == ["https://x.com/jobs/1", "https://x.com/jobs/1"]
+
+
+# ---------------------------------------------------------------------------
+# extract_skills_from_postings -- batching, and who said what
+# ---------------------------------------------------------------------------
+
+def test_postings_are_read_in_batches_not_one_at_a_time(monkeypatch, no_sleep):
+    """The instructions are ~460 tokens and identical for every posting,
+    so sending them once per posting was most of the bill."""
+    batches = []
+
+    def extract(role, batch, **kw):
+        batches.append([p["url"] for p in batch])
+        return {p["url"]: ["Python"] for p in batch}
+
+    monkeypatch.setattr(mv, "extract_skills_from_postings", extract)
+    monkeypatch.setattr(mv, "consolidate_skill_mentions", lambda mentions: [])
+    monkeypatch.setattr(mv, "BATCH_SIZE", 4)
+
+    nine = [posting(f"https://x.com/jobs/{n}") for n in range(9)]
+    mv.extract_market_skills("Gen AI", nine)
+
+    assert sorted((len(b) for b in batches), reverse=True) == [4, 4, 1]
+    assert sum(len(b) for b in batches) == 9      # every posting read exactly once
+
+
+def test_each_posting_keeps_only_its_own_skills(monkeypatch, fake_groq):
+    """The whole risk of sharing a call. If the model's numbering slips,
+    a skill lands on a posting that never mentioned it and every
+    mention_count downstream is wrong, with nothing to show for it."""
+    monkeypatch.setattr(llm, "groq_client", fake_groq(
+        {"postings": {"1": ["Rust"], "2": ["Kafka", "Redis"]}}
+    ))
+
+    found = mv.extract_skills_from_postings(
+        "Backend Engineer", [posting("https://a.com/1"), posting("https://b.com/2")]
+    )
+
+    assert found == {"https://a.com/1": ["Rust"], "https://b.com/2": ["Kafka", "Redis"]}
+
+
+def test_a_posting_the_model_skips_is_left_out_not_guessed(monkeypatch, fake_groq):
+    """Groq answered for posting 1 and said nothing about posting 2.
+    Posting 2 contributes nothing -- exactly as an unreadable single
+    posting used to. Filling it in from its neighbour would invent
+    evidence about a job nobody read."""
+    monkeypatch.setattr(llm, "groq_client", fake_groq({"postings": {"1": ["Rust"]}}))
+
+    found = mv.extract_skills_from_postings(
+        "Backend Engineer", [posting("https://a.com/1"), posting("https://b.com/2")]
+    )
+
+    assert found == {"https://a.com/1": ["Rust"]}
+
+
+def test_a_number_that_was_never_sent_is_dropped(monkeypatch, fake_groq):
+    """Posting 7 does not exist in a batch of one. There is no posting to
+    attach those skills to, so they are dropped rather than landing on
+    whatever happens to be at that index."""
+    monkeypatch.setattr(llm, "groq_client", fake_groq(
+        {"postings": {"1": ["Rust"], "7": ["Invented"]}}
+    ))
+
+    found = mv.extract_skills_from_postings("Backend Engineer", [posting("https://a.com/1")])
+
+    assert found == {"https://a.com/1": ["Rust"]}
+
+
+def test_an_unreadable_batch_reply_loses_the_batch_not_the_check(monkeypatch, fake_groq):
+    """A reply that isn't the right shape skips those postings and lets
+    the rest of the market check carry on -- the same trade the
+    per-posting version made, which is why BATCH_SIZE stays small."""
+    monkeypatch.setattr(llm, "groq_client", fake_groq({"wrong": "shape"}))
+
+    found = mv.extract_skills_from_postings(
+        "Backend Engineer", [posting("https://a.com/1"), posting("https://b.com/2")]
+    )
+
+    assert found == {}
 
 
 # ---------------------------------------------------------------------------
