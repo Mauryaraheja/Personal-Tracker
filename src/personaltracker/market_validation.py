@@ -29,6 +29,8 @@ from .clients import tavily_client
 from .llm import ask_groq_for_json
 from .models import PostingSkillsReply, SkillGroupsReply
 from .text import normalize_url
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 
 DEBUG = False
 

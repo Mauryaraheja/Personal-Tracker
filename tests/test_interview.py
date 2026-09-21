@@ -7,6 +7,7 @@ and that's what these pin down.
 
 import pytest
 from personaltracker import interview
+from personaltracker import llm
 
 QUESTION = {
     "id": "qst_002",
@@ -72,7 +73,7 @@ GOOD_REPLY = {
 
 
 def test_a_written_answer_gets_groqs_marks(monkeypatch,fake_groq):
-    monkeypatch.setattr(interview, "groq_client", fake_groq(GOOD_REPLY))
+    monkeypatch.setattr(llm, "groq_client", fake_groq(GOOD_REPLY))
 
     grade = interview.grade_answer(QUESTION, ANSWER)
 
@@ -83,7 +84,7 @@ def test_a_written_answer_gets_groqs_marks(monkeypatch,fake_groq):
 
 def test_the_score_comes_from_python_not_from_groq(monkeypatch,fake_groq):
     """A score Groq volunteers on its own changes nothing."""
-    monkeypatch.setattr(interview, "groq_client", fake_groq({**GOOD_REPLY, "score": 3}))
+    monkeypatch.setattr(llm, "groq_client", fake_groq({**GOOD_REPLY, "score": 3}))
 
     grade = interview.grade_answer(QUESTION, ANSWER)
 
@@ -92,7 +93,7 @@ def test_the_score_comes_from_python_not_from_groq(monkeypatch,fake_groq):
 
 def test_marks_can_come_back_in_any_order(monkeypatch,fake_groq):
     reply = {**GOOD_REPLY, "marks": list(reversed(GOOD_REPLY["marks"]))}
-    monkeypatch.setattr(interview, "groq_client", fake_groq(reply))
+    monkeypatch.setattr(llm, "groq_client", fake_groq(reply))
 
     grade = interview.grade_answer(QUESTION, ANSWER)
 
@@ -101,7 +102,7 @@ def test_marks_can_come_back_in_any_order(monkeypatch,fake_groq):
 
 
 def test_an_empty_answer_never_calls_groq(monkeypatch):
-    monkeypatch.setattr(interview, "groq_client", None)  # any call would crash
+    monkeypatch.setattr(llm, "groq_client", None)  # any call would crash
 
     grade = interview.grade_answer(QUESTION, "")
 
@@ -109,7 +110,7 @@ def test_an_empty_answer_never_calls_groq(monkeypatch):
 
 
 def test_a_reply_that_is_not_json_raises(monkeypatch,fake_groq):
-    monkeypatch.setattr(interview, "groq_client", fake_groq('{"marks": [{"poi'))
+    monkeypatch.setattr(llm, "groq_client", fake_groq('{"marks": [{"poi'))
 
     with pytest.raises(ValueError):
         interview.grade_answer(QUESTION, ANSWER)
@@ -117,14 +118,14 @@ def test_a_reply_that_is_not_json_raises(monkeypatch,fake_groq):
 
 @pytest.mark.parametrize("marks", [None, [], "all covered"])
 def test_a_reply_without_a_list_of_marks_raises(monkeypatch, marks,fake_groq):
-    monkeypatch.setattr(interview, "groq_client", fake_groq({**GOOD_REPLY, "marks": marks}))
+    monkeypatch.setattr(llm, "groq_client", fake_groq({**GOOD_REPLY, "marks": marks}))
 
     with pytest.raises(ValueError):
         interview.grade_answer(QUESTION, ANSWER)
 
 
 def test_a_reply_without_feedback_raises(monkeypatch,fake_groq):
-    monkeypatch.setattr(interview, "groq_client", fake_groq({"marks": GOOD_REPLY["marks"]}))
+    monkeypatch.setattr(llm, "groq_client", fake_groq({"marks": GOOD_REPLY["marks"]}))
 
     with pytest.raises(ValueError):
         interview.grade_answer(QUESTION, ANSWER)
@@ -138,7 +139,7 @@ def test_a_reply_without_feedback_raises(monkeypatch,fake_groq):
 ])
 def test_each_key_point_must_be_marked_exactly_once(monkeypatch, points,fake_groq):
     reply = {**GOOD_REPLY, "marks": [mark_for(p, "missed") for p in points]}
-    monkeypatch.setattr(interview, "groq_client", fake_groq(reply))
+    monkeypatch.setattr(llm, "groq_client", fake_groq(reply))
 
     with pytest.raises(ValueError):
         interview.grade_answer(QUESTION, ANSWER)
@@ -151,7 +152,7 @@ def test_a_mark_that_is_not_one_of_the_three_raises(monkeypatch, bad_mark,fake_g
         mark_for(1, bad_mark, "splits long documents into smaller pieces"),
         mark_for(2, "missed"), mark_for(3, "missed"),
     ]}
-    monkeypatch.setattr(interview, "groq_client", fake_groq(reply))
+    monkeypatch.setattr(llm, "groq_client", fake_groq(reply))
 
     with pytest.raises(ValueError):
         interview.grade_answer(QUESTION, ANSWER)
@@ -163,7 +164,7 @@ def test_a_quote_may_differ_in_capitals_and_spaces(monkeypatch,fake_groq):
         mark_for(1, "covered", "SPLITS long   documents"),
         mark_for(2, "missed"), mark_for(3, "missed"),
     ]}
-    monkeypatch.setattr(interview, "groq_client", fake_groq(reply))
+    monkeypatch.setattr(llm, "groq_client", fake_groq(reply))
 
     grade = interview.grade_answer(QUESTION, ANSWER)
 
@@ -180,7 +181,7 @@ def test_evidence_must_follow_the_rules(monkeypatch, mark, evidence,fake_groq):
     reply = {**GOOD_REPLY, "marks": [
         mark_for(1, mark, evidence), mark_for(2, "missed"), mark_for(3, "missed"),
     ]}
-    monkeypatch.setattr(interview, "groq_client", fake_groq(reply))
+    monkeypatch.setattr(llm, "groq_client", fake_groq(reply))
 
     with pytest.raises(ValueError):
         interview.grade_answer(QUESTION, ANSWER)
@@ -204,7 +205,7 @@ def cv_question(question, based_on):
 
 
 def test_cv_questions_are_graded_on_the_four_explanation_points(monkeypatch, fake_groq):
-    monkeypatch.setattr(interview, "groq_client", fake_groq({"questions": [
+    monkeypatch.setattr(llm, "groq_client", fake_groq({"questions": [
         cv_question("Why did you choose SQLite?", "with Groq, Tavily and SQLite"),
         cv_question("How does the app spot a scanned PDF?", "Added an OCR fallback for scanned PDF CVs"),
     ]}))
@@ -221,7 +222,7 @@ def test_cv_questions_are_graded_on_the_four_explanation_points(monkeypatch, fak
 
 
 def test_based_on_may_differ_in_capitals_and_spaces(monkeypatch, fake_groq):
-    monkeypatch.setattr(interview, "groq_client", fake_groq({"questions": [
+    monkeypatch.setattr(llm, "groq_client", fake_groq({"questions": [
         cv_question("What did you clean?", "CLEANED sales   data"),
     ]}))
 
@@ -231,7 +232,7 @@ def test_based_on_may_differ_in_capitals_and_spaces(monkeypatch, fake_groq):
 
 
 def test_a_question_about_something_not_in_the_cv_raises(monkeypatch, fake_groq):
-    monkeypatch.setattr(interview, "groq_client", fake_groq({"questions": [
+    monkeypatch.setattr(llm, "groq_client", fake_groq({"questions": [
         cv_question("How did you lead the team?", "Led a team of 50 engineers"),
     ]}))
 
@@ -247,14 +248,14 @@ def test_a_question_about_something_not_in_the_cv_raises(monkeypatch, fake_groq)
     {"questions": [cv_question("Why pandas?", None)]},             # no based_on
 ])
 def test_a_reply_with_the_wrong_shape_raises(monkeypatch, fake_groq, reply):
-    monkeypatch.setattr(interview, "groq_client", fake_groq(reply))
+    monkeypatch.setattr(llm, "groq_client", fake_groq(reply))
 
     with pytest.raises(ValueError):
         interview.generate_cv_questions(CV_TEXT, "Data Analyst")
 
 
 def test_extra_questions_are_cut_to_the_count(monkeypatch, fake_groq):
-    monkeypatch.setattr(interview, "groq_client", fake_groq({"questions": [
+    monkeypatch.setattr(llm, "groq_client", fake_groq({"questions": [
         cv_question("Why SQLite?", "SQLite"),
         cv_question("Why OCR?", "OCR fallback"),
         cv_question("Why pandas?", "pandas"),
@@ -289,7 +290,7 @@ def posting_question(question, based_on, key_points=KUBERNETES_POINTS):
 
 
 def test_posting_questions_keep_groqs_key_points(monkeypatch, fake_groq):
-    monkeypatch.setattr(interview, "groq_client", fake_groq({"questions": [
+    monkeypatch.setattr(llm, "groq_client", fake_groq({"questions": [
         posting_question("How would you deploy a model on Kubernetes?",
                          "Deploy models with Docker and Kubernetes"),
     ]}))
@@ -305,7 +306,7 @@ def test_posting_questions_keep_groqs_key_points(monkeypatch, fake_groq):
 
 
 def test_a_question_about_something_not_in_the_posting_raises(monkeypatch, fake_groq):
-    monkeypatch.setattr(interview, "groq_client", fake_groq({"questions": [
+    monkeypatch.setattr(llm, "groq_client", fake_groq({"questions": [
         posting_question("How would you tune Spark jobs?", "Optimise Spark jobs"),
     ]}))
 
@@ -320,7 +321,7 @@ def test_a_question_about_something_not_in_the_posting_raises(monkeypatch, fake_
     ["Containers", "", "Scaling"],             # an empty one
 ])
 def test_a_posting_question_needs_3_to_5_key_points(monkeypatch, fake_groq, key_points):
-    monkeypatch.setattr(interview, "groq_client", fake_groq({"questions": [
+    monkeypatch.setattr(llm, "groq_client", fake_groq({"questions": [
         posting_question("How would you use LangGraph?", "experience with LangGraph", key_points),
     ]}))
 
@@ -333,7 +334,7 @@ def test_a_posting_question_needs_3_to_5_key_points(monkeypatch, fake_groq, key_
     {"questions": []},          # empty list
 ])
 def test_a_posting_reply_with_the_wrong_shape_raises(monkeypatch, fake_groq, reply):
-    monkeypatch.setattr(interview, "groq_client", fake_groq(reply))
+    monkeypatch.setattr(llm, "groq_client", fake_groq(reply))
 
     with pytest.raises(ValueError):
         interview.generate_posting_questions(POSTING_TEXT)
@@ -373,7 +374,7 @@ def test_a_real_question_keeps_its_url_and_our_skill_id(monkeypatch, fake_groq):
     monkeypatch.setattr(interview, "tavily_client", FakeTavily([PAGE]))
     reply_item = skill_question("What is chunking in RAG?", PAGE_URL)
     reply_item["skill_id"] = "skl_999"  # Groq's guess must be ignored
-    monkeypatch.setattr(interview, "groq_client", fake_groq({"questions": [reply_item]}))
+    monkeypatch.setattr(llm, "groq_client", fake_groq({"questions": [reply_item]}))
 
     questions = interview.generate_skill_questions(SKILL)
 
@@ -386,7 +387,7 @@ def test_a_real_question_keeps_its_url_and_our_skill_id(monkeypatch, fake_groq):
 
 def test_groq_may_write_its_own_question_with_no_url(monkeypatch, fake_groq):
     monkeypatch.setattr(interview, "tavily_client", FakeTavily([PAGE]))
-    monkeypatch.setattr(interview, "groq_client", fake_groq({"questions": [
+    monkeypatch.setattr(llm, "groq_client", fake_groq({"questions": [
         skill_question("How would you evaluate a RAG pipeline?", None),
     ]}))
 
@@ -397,7 +398,7 @@ def test_groq_may_write_its_own_question_with_no_url(monkeypatch, fake_groq):
 
 def test_with_no_search_results_groq_still_writes_questions(monkeypatch, fake_groq):
     monkeypatch.setattr(interview, "tavily_client", FakeTavily([]))
-    monkeypatch.setattr(interview, "groq_client", fake_groq({"questions": [
+    monkeypatch.setattr(llm, "groq_client", fake_groq({"questions": [
         skill_question("How would you evaluate a RAG pipeline?", None),
     ]}))
 
@@ -408,7 +409,7 @@ def test_with_no_search_results_groq_still_writes_questions(monkeypatch, fake_gr
 
 def test_a_url_tavily_never_returned_raises(monkeypatch, fake_groq):
     monkeypatch.setattr(interview, "tavily_client", FakeTavily([PAGE]))
-    monkeypatch.setattr(interview, "groq_client", fake_groq({"questions": [
+    monkeypatch.setattr(llm, "groq_client", fake_groq({"questions": [
         skill_question("What is chunking?", "https://made-up.example.com/questions"),
     ]}))
 
@@ -424,7 +425,7 @@ def test_a_url_tavily_never_returned_raises(monkeypatch, fake_groq):
 ])
 def test_a_skill_reply_with_the_wrong_shape_raises(monkeypatch, fake_groq, reply):
     monkeypatch.setattr(interview, "tavily_client", FakeTavily([PAGE]))
-    monkeypatch.setattr(interview, "groq_client", fake_groq(reply))
+    monkeypatch.setattr(llm, "groq_client", fake_groq(reply))
 
     with pytest.raises(ValueError):
         interview.generate_skill_questions(SKILL)
@@ -490,7 +491,7 @@ def test_nothing_to_ask_about_raises(monkeypatch):
 def test_a_quote_shortened_with_dots_is_accepted(monkeypatch, fake_groq, dots):
     """Groq skipped a messy middle part and cut the end, like in a real run."""
     quote = f"Chunking splits long documents {dots} so they fit the model {dots}"
-    monkeypatch.setattr(interview, "groq_client", fake_groq({**GOOD_REPLY, "marks": [
+    monkeypatch.setattr(llm, "groq_client", fake_groq({**GOOD_REPLY, "marks": [
         mark_for(1, "covered", quote), mark_for(2, "missed"), mark_for(3, "missed"),
     ]}))
 
@@ -505,7 +506,7 @@ def test_a_quote_shortened_with_dots_is_accepted(monkeypatch, fake_groq, dots):
     "...",                                                            # nothing but dots
 ])
 def test_a_shortened_quote_still_has_to_be_real(monkeypatch, fake_groq, quote):
-    monkeypatch.setattr(interview, "groq_client", fake_groq({**GOOD_REPLY, "marks": [
+    monkeypatch.setattr(llm, "groq_client", fake_groq({**GOOD_REPLY, "marks": [
         mark_for(1, "covered", quote), mark_for(2, "missed"), mark_for(3, "missed"),
     ]}))
 
@@ -514,7 +515,7 @@ def test_a_shortened_quote_still_has_to_be_real(monkeypatch, fake_groq, quote):
 
 
 def test_a_based_on_shortened_with_dots_is_accepted(monkeypatch, fake_groq):
-    monkeypatch.setattr(interview, "groq_client", fake_groq({"questions": [
+    monkeypatch.setattr(llm, "groq_client", fake_groq({"questions": [
         cv_question("Why SQLite?", "Built NextRole ... with Groq, Tavily and SQLite"),
     ]}))
 

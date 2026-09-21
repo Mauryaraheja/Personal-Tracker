@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .roadmap import build_roadmap, refine_role
+from .text import normalize_text
 
 # src/personaltracker/tracker.py -> parent -> parent -> parent = repo root
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "personaltracker.db"
@@ -52,7 +53,7 @@ def _normalize_role(role: str) -> str:
     typed it is still what gets sent to the LLM, since casing can carry
     real meaning in a job title.
     """
-    normalized = " ".join(role.split()).lower()
+    normalized = normalize_text(role)
     if not normalized:
         raise ValueError("role must not be empty")
     return normalized

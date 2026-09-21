@@ -44,8 +44,8 @@ def _quote_is_in(quote: str, text: str) -> bool:
     every piece must be in the text, in the same order. A made-up piece
     still fails.
     """
-    text = _normalize_text(text)
-    pieces = [_normalize_text(piece) for piece in quote.replace("…", "...").split("...")]
+    text = normalize_text(text)
+    pieces = [normalize_text(piece) for piece in quote.replace("…", "...").split("...")]
     pieces = [piece for piece in pieces if piece]
     if not pieces:
         return False

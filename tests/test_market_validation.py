@@ -15,8 +15,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from personaltracker import llm
 from personaltracker import market_validation as mv
-from personaltracker import roadmap
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +300,7 @@ def test_confirmed_unions_postings_instead_of_summing_them(monkeypatch):
     """One posting naming both Chroma and Pinecone is ONE posting asking
     for vector databases, not two. Summing would report 4 postings when
     only 3 exist."""
-    monkeypatch.setattr(mv, "groq_client", SimpleNamespace(
+    monkeypatch.setattr(llm, "groq_client", SimpleNamespace(
         chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kw: groq_reply({
             "confirmed": [{
                 "roadmap_skill_id": "skl_001",
@@ -319,7 +319,7 @@ def test_confirmed_unions_postings_instead_of_summing_them(monkeypatch):
 
 def test_counts_come_from_python_not_from_the_model(monkeypatch):
     """If the model invents a count, it must be overwritten, not trusted."""
-    monkeypatch.setattr(mv, "groq_client", SimpleNamespace(
+    monkeypatch.setattr(llm, "groq_client", SimpleNamespace(
         chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kw: groq_reply({
             "confirmed": [{
                 "roadmap_skill_id": "skl_001",
@@ -336,7 +336,7 @@ def test_counts_come_from_python_not_from_the_model(monkeypatch):
 
 
 def test_a_match_the_model_invented_is_ignored(monkeypatch):
-    monkeypatch.setattr(mv, "groq_client", SimpleNamespace(
+    monkeypatch.setattr(llm, "groq_client", SimpleNamespace(
         chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kw: groq_reply({
             "confirmed": [{
                 "roadmap_skill_id": "skl_001",
@@ -352,7 +352,7 @@ def test_a_match_the_model_invented_is_ignored(monkeypatch):
 
 
 def test_suggested_additions_get_their_real_counts(monkeypatch):
-    monkeypatch.setattr(mv, "groq_client", SimpleNamespace(
+    monkeypatch.setattr(llm, "groq_client", SimpleNamespace(
         chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kw: groq_reply({
             "suggested_additions": [{"skill_name": "Pinecone"}],
         })))
@@ -366,7 +366,7 @@ def test_suggested_additions_get_their_real_counts(monkeypatch):
 
 def test_all_three_buckets_always_exist(monkeypatch):
     """The model omits keys for empty buckets; app.py would KeyError."""
-    monkeypatch.setattr(mv, "groq_client", SimpleNamespace(
+    monkeypatch.setattr(llm, "groq_client", SimpleNamespace(
         chat=SimpleNamespace(completions=SimpleNamespace(
             create=lambda **kw: groq_reply({"confirmed": []})
         ))
@@ -378,7 +378,7 @@ def test_all_three_buckets_always_exist(monkeypatch):
 
 
 def test_invalid_json_returns_empty_buckets_not_a_crash(monkeypatch):
-    monkeypatch.setattr(mv, "groq_client", SimpleNamespace(
+    monkeypatch.setattr(llm, "groq_client", SimpleNamespace(
         chat=SimpleNamespace(completions=SimpleNamespace(
             create=lambda **kw: groq_reply("this is not json")
         ))
@@ -390,7 +390,7 @@ def test_invalid_json_returns_empty_buckets_not_a_crash(monkeypatch):
 
 
 def test_consolidation_survives_invalid_json(monkeypatch):
-    monkeypatch.setattr(mv, "groq_client", SimpleNamespace(
+    monkeypatch.setattr(llm, "groq_client", SimpleNamespace(
         chat=SimpleNamespace(completions=SimpleNamespace(
             create=lambda **kw: groq_reply("not json either")
         ))
@@ -413,7 +413,7 @@ def test_market_check_uses_the_title_it_is_given_without_asking_groq(monkeypatch
     no_groq = SimpleNamespace(
         chat=SimpleNamespace(completions=SimpleNamespace(create=groq_must_not_be_called))
     )
-    monkeypatch.setattr(roadmap, "groq_client", no_groq)  # refine_role lives here
+    monkeypatch.setattr(llm, "groq_client", no_groq)  # every Groq call goes through llm
 
     searched_for = []
 
@@ -437,7 +437,7 @@ TWO_ROADMAP_SKILLS = ROADMAP + [{"id": "skl_002", "name": "Prompt Engineering"}]
 
 def model_answers(monkeypatch, payload):
     """Make compare_to_roadmap's one Groq call return `payload`."""
-    monkeypatch.setattr(mv, "groq_client", SimpleNamespace(
+    monkeypatch.setattr(llm, "groq_client", SimpleNamespace(
         chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kw: groq_reply(payload)))
     ))
 

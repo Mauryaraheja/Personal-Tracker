@@ -7,6 +7,7 @@ fail loudly instead.
 
 import pytest
 from personaltracker import gap_analysis
+from personaltracker import llm
 
 SKILLS = [
     {"id": "skl_001", "name": "RAG", "description": "Retrieval-augmented generation",
@@ -15,7 +16,7 @@ SKILLS = [
 
 
 def test_a_good_reply_becomes_gaps_with_ids(monkeypatch,fake_groq):
-    monkeypatch.setattr(gap_analysis, "groq_client", fake_groq({"gaps": [
+    monkeypatch.setattr(llm, "groq_client", fake_groq({"gaps": [
         {"skill_id": "skl_001", "status": "missing", "evidence_from_cv": None,
          "suggestion": "Build a small RAG demo"},
     ]}))
@@ -27,21 +28,21 @@ def test_a_good_reply_becomes_gaps_with_ids(monkeypatch,fake_groq):
 
 def test_a_reply_with_the_wrong_key_raises(monkeypatch,fake_groq):
     """Valid JSON, wrong shape -- the case JSON mode can't prevent."""
-    monkeypatch.setattr(gap_analysis, "groq_client", fake_groq({"results": []}))
+    monkeypatch.setattr(llm, "groq_client", fake_groq({"results": []}))
 
     with pytest.raises(ValueError):
         gap_analysis.get_skill_gaps(SKILLS, "my CV text")
 
 
 def test_an_empty_gap_list_raises(monkeypatch,fake_groq):
-    monkeypatch.setattr(gap_analysis, "groq_client", fake_groq({"gaps": []}))
+    monkeypatch.setattr(llm, "groq_client", fake_groq({"gaps": []}))
 
     with pytest.raises(ValueError):
         gap_analysis.get_skill_gaps(SKILLS, "my CV text")
 
 
 def test_a_reply_that_is_not_json_raises(monkeypatch,fake_groq):
-    monkeypatch.setattr(gap_analysis, "groq_client", fake_groq('{"gaps": [{"skill_'))
+    monkeypatch.setattr(llm, "groq_client", fake_groq('{"gaps": [{"skill_'))
 
     with pytest.raises(ValueError):
         gap_analysis.get_skill_gaps(SKILLS, "my CV text")
@@ -63,7 +64,7 @@ def gap(skill_id):
 
 
 def test_gaps_can_come_back_in_any_order(monkeypatch,fake_groq):
-    monkeypatch.setattr(gap_analysis, "groq_client", fake_groq(
+    monkeypatch.setattr(llm, "groq_client", fake_groq(
         {"gaps": [gap("skl_002"), gap("skl_001")]}
     ))
 
@@ -74,21 +75,21 @@ def test_gaps_can_come_back_in_any_order(monkeypatch,fake_groq):
 
 def test_a_skipped_skill_raises(monkeypatch,fake_groq):
     """Nothing crashes -- the skill would just vanish from Next Steps."""
-    monkeypatch.setattr(gap_analysis, "groq_client", fake_groq({"gaps": [gap("skl_001")]}))
+    monkeypatch.setattr(llm, "groq_client", fake_groq({"gaps": [gap("skl_001")]}))
 
     with pytest.raises(ValueError):
         gap_analysis.get_skill_gaps(TWO_SKILLS, "my CV text")
 
 
 def test_a_gap_for_an_unknown_skill_raises(monkeypatch,fake_groq):
-    monkeypatch.setattr(gap_analysis, "groq_client", fake_groq({"gaps": [gap("skl_999")]}))
+    monkeypatch.setattr(llm, "groq_client", fake_groq({"gaps": [gap("skl_999")]}))
 
     with pytest.raises(ValueError):
         gap_analysis.get_skill_gaps(SKILLS, "my CV text")
 
 
 def test_a_skill_covered_twice_raises(monkeypatch,fake_groq):
-    monkeypatch.setattr(gap_analysis, "groq_client", fake_groq(
+    monkeypatch.setattr(llm, "groq_client", fake_groq(
         {"gaps": [gap("skl_001"), gap("skl_001")]}
     ))
 
