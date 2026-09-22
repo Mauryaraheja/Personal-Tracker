@@ -9,7 +9,6 @@ import pytest
 
 from personaltracker.tracker import _normalize_role
 
-
 # ---------------------------------------------------------------------------
 # _normalize_role -- casing and spacing
 # ---------------------------------------------------------------------------
@@ -220,3 +219,100 @@ def test_refined_title_is_read_back_without_calling_the_llm(db, fake_llm):
 def test_refined_title_for_an_unknown_role_raises(db, fake_llm):
     with pytest.raises(KeyError):
         db.get_refined_title("Never Tracked")
+
+# ---------------------------------------------------------------------------
+# Rebuilding a saved roadmap
+# ---------------------------------------------------------------------------
+
+def _skill(skill_id, name):
+    return {
+        "id": skill_id,
+        "name": name,
+        "description": "d",
+        "why_it_matters": "w",
+        "priority": "high",
+        "level_required": "intermediate",
+        "source_url": None,
+    }
+
+
+def test_rebuild_generates_the_roadmap_again(db, fake_llm):
+    db.get_or_create_roadmap("Gen AI")
+    assert len(fake_llm.build_calls) == 1
+
+    db.rebuild_roadmap("Gen AI")
+
+    assert len(fake_llm.build_calls) == 2, "rebuild must call the LLM again"
+    assert len(db.get_or_create_roadmap("Gen AI")) == 3, "and the new one must be saved"
+
+
+def test_rebuild_replaces_the_old_skills(db, fake_llm, monkeypatch):
+    db.get_or_create_roadmap("Gen AI")
+
+    monkeypatch.setattr(db, "build_roadmap", lambda title: [_skill("skl_001", "Vulkan")])
+    db.rebuild_roadmap("Gen AI")
+
+    names = [s["name"] for s in db.get_or_create_roadmap("Gen AI")]
+    assert names == ["Vulkan"], "the old roadmap must be gone, not appended to"
+
+
+def test_rebuild_keeps_progress_for_a_skill_that_survives(db, fake_llm, monkeypatch):
+    """Progress follows the skill NAME, not its id -- the same skill can
+    come back at a different position in the new roadmap."""
+    db.get_or_create_roadmap("Gen AI")
+    db.update_tracker_status("Gen AI", "skl_002", "completed", "finished the course")
+
+    monkeypatch.setattr(db, "build_roadmap", lambda title: [
+        _skill("skl_001", "Generative AI Engineer skill 2"),  # same skill, new id
+        _skill("skl_002", "Vulkan"),                          # brand new
+    ])
+    db.rebuild_roadmap("Gen AI")
+
+    items = {i["skill_id"]: i for i in db.get_tracker_items("Gen AI")}
+    assert items["skl_001"]["status"] == "completed"
+    assert items["skl_001"]["notes"] == "finished the course"
+    assert items["skl_002"]["status"] == "not_started"
+    assert items["skl_002"]["notes"] is None
+
+
+def test_rebuild_drops_progress_for_a_skill_that_disappears(db, fake_llm, monkeypatch):
+    db.get_or_create_roadmap("Gen AI")
+    db.update_tracker_status("Gen AI", "skl_001", "completed", "gone soon")
+
+    monkeypatch.setattr(db, "build_roadmap", lambda title: [_skill("skl_001", "Vulkan")])
+    db.rebuild_roadmap("Gen AI")
+
+    items = db.get_tracker_items("Gen AI")
+    assert [i["name"] for i in items] == ["Vulkan"]
+    assert items[0]["notes"] is None, "notes must not land on a different skill"
+
+
+def test_a_spelling_difference_still_counts_as_the_same_skill(db, fake_llm, monkeypatch):
+    db.get_or_create_roadmap("Gen AI")
+    db.update_tracker_status("Gen AI", "skl_001", "in_progress", "halfway")
+
+    monkeypatch.setattr(db, "build_roadmap", lambda title: [
+        _skill("skl_001", "  generative ai engineer   SKILL 1 "),
+    ])
+    db.rebuild_roadmap("Gen AI")
+
+    items = db.get_tracker_items("Gen AI")
+    assert items[0]["status"] == "in_progress"
+    assert items[0]["notes"] == "halfway"
+
+
+def test_a_failed_rebuild_leaves_the_old_roadmap_alone(db, fake_llm, monkeypatch):
+    """A rate limit must not cost the user the roadmap they already had."""
+    before = db.get_or_create_roadmap("Gen AI")
+    db.update_tracker_status("Gen AI", "skl_001", "completed", "keep me")
+
+    def boom(title):
+        raise RuntimeError("Groq is rate limited")
+
+    monkeypatch.setattr(db, "build_roadmap", boom)
+
+    with pytest.raises(RuntimeError):
+        db.rebuild_roadmap("Gen AI")
+
+    assert db.get_or_create_roadmap("Gen AI") == before
+    assert db.get_tracker_items("Gen AI")[0]["notes"] == "keep me"

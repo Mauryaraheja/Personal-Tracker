@@ -56,6 +56,14 @@ DEFAULTS = {
     "interview_questions": None,
     "interview_grades": None,
     "uploader_key": 0,
+    # Same trick as uploader_key, for the progress dropdowns. A rebuild
+    # reuses skill ids (skl_001, skl_002...) for different skills, and a
+    # Streamlit widget keyed "status_skl_001" keeps whatever was selected
+    # before -- so a brand new skill would show the old skill's progress.
+    # Bumping this changes every key, forcing fresh dropdowns.
+    "skills_key": 0,
+    # True only while the rebuild confirmation is on screen.
+    "confirming_rebuild": False,
 }
 
 for key, value in DEFAULTS.items():
@@ -180,7 +188,7 @@ if st.session_state.skills:
                 current_status = tracker_by_skill.get(skill["id"], {}).get(
                     "status", "not_started"
                 )
-                widget_key = f"status_{skill['id']}"
+                widget_key = f"status_{st.session_state.skills_key}_{skill['id']}"
                 st.selectbox(
                     "Progress",
                     STATUS_OPTIONS,
@@ -191,6 +199,57 @@ if st.session_state.skills:
                     args=(st.session_state.role, skill["id"], widget_key),
                     label_visibility="collapsed",
                 )
+
+
+    # -----------------------------------------------------------------------
+    # Rebuild this roadmap
+    # -----------------------------------------------------------------------
+    # Behind a confirm step on purpose. Every other button either reads the
+    # database or acts on something the user just supplied; this one spends
+    # Groq and Tavily credits to replace data they already have, so a
+    # misclick has a real cost and is not undoable.
+    if st.session_state.confirming_rebuild:
+        st.warning(
+            "This throws away the saved roadmap for "
+            f"**{st.session_state.role}** and generates a new one "
+            "(2 Groq calls + 2 Tavily searches). Progress is kept for every "
+            "skill that comes back with the same name. Notes on a skill the "
+            "new roadmap drops are lost."
+        )
+        col_yes, col_no, _ = st.columns([1, 1, 3])
+        if col_no.button("Cancel", use_container_width=True):
+            st.session_state.confirming_rebuild = False
+            st.rerun()
+        if col_yes.button("Yes, rebuild", type="primary", use_container_width=True):
+            try:
+                with st.spinner("Building a new roadmap for this role..."):
+                    skills = rebuild_roadmap(st.session_state.role)
+                    tracker = get_tracker_items(st.session_state.role)
+            except Exception as e:
+                st.error(
+                    "Couldn't rebuild the roadmap. Your existing one is "
+                    "untouched -- nothing was deleted. This is usually a Groq "
+                    "or Tavily issue (rate limit, network, or bad key)."
+                )
+                with st.expander("Technical details"):
+                    st.exception(e)
+            else:
+                st.session_state.skills = skills
+                st.session_state.tracker = tracker
+                # Everything below was worked out from the OLD skill list, so
+                # it now describes skills that may no longer exist. The CV
+                # stays -- that is the user's file, not a result.
+                st.session_state.gaps = None
+                st.session_state.market_insights = None
+                st.session_state.interview_questions = None
+                st.session_state.interview_grades = None
+                st.session_state.skills_key += 1
+                st.session_state.confirming_rebuild = False
+                st.rerun()
+    elif st.button("Rebuild this roadmap"):
+        st.session_state.confirming_rebuild = True
+        st.rerun()
+
 
     # -----------------------------------------------------------------------
     # Section 3: Upload Your CV

@@ -6,7 +6,13 @@ so callers never have to know which module a function lives in.
 
 from .cv_parser import extract_text_from_pdf
 from .gap_analysis import get_skill_gaps
-from .tracker import get_or_create_roadmap, get_refined_title, get_tracker_items, update_tracker_status
+from .tracker import (
+    get_or_create_roadmap,
+    get_refined_title,
+    get_tracker_items,
+    rebuild_roadmap,
+    update_tracker_status,
+)
 from .market_validation import get_market_validation
 from .interview import build_interview, grade_answer
 
@@ -16,6 +22,7 @@ __all__ = [
     "get_or_create_roadmap",
     "get_refined_title",
     "get_tracker_items",
+    "rebuild_roadmap",
     "update_tracker_status",
     "get_market_validation",
     "build_interview",

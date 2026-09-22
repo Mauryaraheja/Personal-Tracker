@@ -295,6 +295,62 @@ def get_or_create_roadmap(role: str) -> list[dict]:
         _save_roadmap(conn, role_key, skills)
         return skills
 
+def rebuild_roadmap(role: str) -> list[dict]:
+    """Throw this role's saved roadmap away and generate it again.
+
+    get_or_create_roadmap never regenerates -- that is the whole point of
+    saving roadmaps. It also means a change to the roadmap prompt stays
+    invisible for every role already saved. This is the escape hatch, and
+    the reason it exists is that the alternative was deleting
+    personaltracker.db, which throws away every other role's progress and
+    the posting cache too.
+
+    Progress survives where the skill does: status and notes carry over
+    to any skill whose name comes back unchanged, compared with
+    normalize_text so "Ray Tracing" and "ray  tracing" count as one. A
+    skill the new roadmap drops takes its notes with it -- there is
+    nothing left to attach them to.
+    """
+    init_db()
+    with _connect() as conn:
+        role_key, refined_title = _resolve_role_key(conn, role)
+        progress = {
+            normalize_text(row["name"]): (row["status"], row["notes"])
+            for row in conn.execute(
+                """SELECT s.name, t.status, t.notes
+                     FROM tracker_items t
+                     JOIN skills s ON s.role = t.role AND s.skill_id = t.skill_id
+                    WHERE t.role = ?""",
+                (role_key,),
+            )
+        }
+
+    # Build first, delete second, and deliberately outside the
+    # transaction. If Groq or Tavily fails here, the roadmap the user
+    # already has is still in the database, untouched. Deleting first
+    # would mean a rate limit could leave them with nothing.
+    skills = build_roadmap(refined_title)
+
+    now = datetime.now(timezone.utc).isoformat()
+    with _connect() as conn:
+        # tracker_items first -- its rows point at skills.
+        conn.execute("DELETE FROM tracker_items WHERE role = ?", (role_key,))
+        conn.execute("DELETE FROM skills WHERE role = ?", (role_key,))
+        _save_roadmap(conn, role_key, skills)
+
+        for skill in skills:
+            kept = progress.get(normalize_text(skill.get("name") or ""))
+            if kept is None:
+                continue
+            status, notes = kept
+            conn.execute(
+                """UPDATE tracker_items SET status = ?, notes = ?, updated_at = ?
+                    WHERE role = ? AND skill_id = ?""",
+                (status, notes, now, role_key, skill["id"]),
+            )
+
+    return skills
+
 
 def get_refined_title(role: str) -> str:
     """Returns the job title this role's roadmap was built from.
