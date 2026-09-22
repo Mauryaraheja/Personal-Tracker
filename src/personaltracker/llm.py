@@ -62,3 +62,36 @@ def _create(prompt: str, max_tokens: int | None = None, json_mode: bool = False,
         **options,
     )
     return response.choices[0].message.content
+
+
+
+# Whisper, on Groq. It lives here for the same reason every other Groq
+# call does: one place decides which model we use and how we talk to the
+# API. "turbo" is the cheap, fast one -- an interview answer is a minute
+# of clear speech, not a noisy two-hour recording.
+TRANSCRIBE_MODEL = "whisper-large-v3-turbo"
+
+
+def transcribe(audio_bytes: bytes, filename: str = "answer.wav") -> str:
+    """Turn a recorded answer into text.
+
+    Silence raises instead of returning "". An empty answer is already
+    meaningful to the grader -- it marks every key point missed and
+    scores zero -- so a failed microphone would be graded as a candidate
+    who had nothing to say. Those are different things, and only one of
+    them belongs in the score.
+
+    `filename` is only a label: the Groq API uses the extension to work
+    out the audio format, and nothing is written to disk.
+    """
+    response = groq_client.audio.transcriptions.create(
+        model=TRANSCRIBE_MODEL,
+        file=(filename, audio_bytes),
+    )
+
+    text = response.text.strip()
+    if not text:
+        raise ValueError(
+            "Nothing was heard in that recording -- record it again, or type your answer."
+        )
+    return text

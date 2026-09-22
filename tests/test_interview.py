@@ -172,7 +172,6 @@ def test_a_quote_may_differ_in_capitals_and_spaces(monkeypatch,fake_groq):
 
 
 @pytest.mark.parametrize("mark, evidence", [
-    ("covered", "chunks overlap by 10 percent"),  # a quote that isn't in the answer
     ("partly", None),                             # no quote at all
     ("covered", "   "),                           # an empty quote is "in" every text
     ("missed", "Too big and search gets vague"),  # missed must have no quote
@@ -506,12 +505,22 @@ def test_a_quote_shortened_with_dots_is_accepted(monkeypatch, fake_groq, dots):
     "...",                                                            # nothing but dots
 ])
 def test_a_shortened_quote_still_has_to_be_real(monkeypatch, fake_groq, quote):
+    """A made-up quote earns nothing.
+
+    It no longer costs the whole answer -- see
+    test_a_quote_that_isnt_in_the_answer_only_costs_that_point -- but the
+    point it was claiming is still refused, which is what this check was
+    always for.
+    """
     monkeypatch.setattr(llm, "groq_client", fake_groq({**GOOD_REPLY, "marks": [
         mark_for(1, "covered", quote), mark_for(2, "missed"), mark_for(3, "missed"),
     ]}))
 
-    with pytest.raises(ValueError):
-        interview.grade_answer(QUESTION, ANSWER)
+    grade = interview.grade_answer(QUESTION, ANSWER)
+
+    assert grade["marks"][0]["mark"] == "missed"
+    assert grade["marks"][0]["evidence"] is None
+    assert grade["score"] == 0
 
 
 def test_a_based_on_shortened_with_dots_is_accepted(monkeypatch, fake_groq):
@@ -611,3 +620,96 @@ def test_a_curly_apostrophe_is_the_same_word():
 def test_ignoring_punctuation_does_not_let_a_fake_quote_through(quote):
     """Looser about commas, exactly as strict about words."""
     assert not interview._quote_is_in(quote, REAL_ANSWER)
+
+
+# ---------------------------------------------------------------------------
+# A misquote costs one point, not the whole answer
+# ---------------------------------------------------------------------------
+
+MISQUOTED = {**GOOD_REPLY, "marks": [
+    mark_for(1, "covered", "chunks overlap by 10 percent"),      # never said
+    mark_for(2, "covered", "Chunking splits long documents"),    # really said
+    mark_for(3, "missed"),
+]}
+
+
+def test_a_quote_that_isnt_in_the_answer_only_costs_that_point(monkeypatch, fake_groq):
+    """The real failure, and it happened on a spoken answer.
+
+    Groq marked a key point covered and quoted words the candidate never
+    said. That used to raise, and the whole answer went with it -- an
+    answer they had just spoken out loud and now had to repeat.
+    """
+    monkeypatch.setattr(llm, "groq_client", fake_groq(MISQUOTED))
+
+    grade = interview.grade_answer(QUESTION, ANSWER)
+
+    assert [m["mark"] for m in grade["marks"]] == ["missed", "covered", "missed"]
+
+
+def test_an_unverifiable_quote_is_thrown_away_with_its_credit(monkeypatch, fake_groq):
+    """No credit AND no quote: showing it would repeat Groq's invention."""
+    monkeypatch.setattr(llm, "groq_client", fake_groq(MISQUOTED))
+
+    grade = interview.grade_answer(QUESTION, ANSWER)
+
+    assert grade["marks"][0]["evidence"] is None
+    assert grade["score"] == 1
+
+
+def test_a_dropped_point_is_said_out_loud(monkeypatch, fake_groq):
+    """A mark Python took away must not vanish silently."""
+    monkeypatch.setattr(llm, "groq_client", fake_groq(MISQUOTED))
+
+    grade = interview.grade_answer(QUESTION, ANSWER)
+
+    assert "one point" in grade["feedback"]
+    assert "aren't in your answer" in grade["feedback"]
+
+
+# ---------------------------------------------------------------------------
+# The follow-up -- a question about the answer just given
+# ---------------------------------------------------------------------------
+
+FOLLOW_UP_REPLY = {
+    "question": "Why did that make the search vague?",
+    "based_on": "Too big and search gets vague",
+    "key_points": ["a point", "b point", "c point"],
+}
+
+
+def test_a_follow_up_is_tied_to_the_question_it_follows(monkeypatch, fake_groq):
+    monkeypatch.setattr(llm, "groq_client", fake_groq(FOLLOW_UP_REPLY))
+
+    follow_up = interview.generate_follow_up(QUESTION, ANSWER, interview.START_LEVEL)
+
+    assert follow_up["type"] == "follow_up"
+    assert follow_up["follows"] == QUESTION["id"]
+    assert follow_up["id"] == "qst_002_up"
+
+
+def test_a_follow_up_is_grounded_in_the_answer_not_the_cv(monkeypatch, fake_groq):
+    """The quote has to come from what they SAID -- that is what this
+    question is about."""
+    monkeypatch.setattr(llm, "groq_client", fake_groq(FOLLOW_UP_REPLY))
+
+    follow_up = interview.generate_follow_up(QUESTION, ANSWER, interview.START_LEVEL)
+
+    assert follow_up["based_on"] in ANSWER
+
+
+def test_a_follow_up_about_words_never_said_is_refused(monkeypatch, fake_groq):
+    monkeypatch.setattr(llm, "groq_client",
+                        fake_groq({**FOLLOW_UP_REPLY, "based_on": "we used a vector database"}))
+
+    with pytest.raises(ValueError, match="aren't in the answer"):
+        interview.generate_follow_up(QUESTION, ANSWER, interview.START_LEVEL)
+
+
+def test_a_follow_up_keeps_the_skill_it_came_from(monkeypatch, fake_groq):
+    """So the app can still say which skill this question is about."""
+    monkeypatch.setattr(llm, "groq_client", fake_groq(FOLLOW_UP_REPLY))
+
+    follow_up = interview.generate_follow_up(QUESTION, ANSWER, interview.START_LEVEL)
+
+    assert follow_up["skill_id"] == QUESTION["skill_id"]

@@ -13,9 +13,17 @@ a role is tracked it costs three API requests (two Groq, one Tavily); every
 visit after that is a local database read.
 """
 
+import pathlib
+
 import streamlit as st
+import streamlit.components.v1 as components
+
 from personaltracker import (
+    LEVEL_DOWN_RATIO,
+    START_LEVEL,
     build_interview,
+    generate_follow_up,
+    next_level,
     extract_text_from_pdf,
     grade_answer,
     get_skill_gaps,
@@ -28,6 +36,14 @@ from personaltracker import (
 )
 
 st.set_page_config(page_title="NextRole", layout="wide")
+
+# The voice interviewer is its own little web page, loaded here once.
+# declare_component, not components.html, for two reasons: only a declared
+# component can send a value BACK to Python, and Streamlit serves it from
+# its own address -- a components.html page has no real origin, and a
+# browser will not hand the microphone to a page it cannot identify.
+VOICE_DIR = pathlib.Path(__file__).parent / "voice_component"
+voice_component = components.declare_component("nextrole_voice", path=str(VOICE_DIR))
 
 STATUS_OPTIONS = ["not_started", "in_progress", "completed"]
 STATUS_LABELS = {
@@ -56,6 +72,10 @@ DEFAULTS = {
     # back every time, so old grades would survive "Start Over".
     "interview_questions": None,
     "interview_grades": None,
+    # How hard the next question should be (1-5), and why a
+    # follow-up could not be written, if that happened.
+    "interview_level": None,
+    "follow_up_error": None,
     "uploader_key": 0,
     # Same trick as uploader_key, for the progress dropdowns. A rebuild
     # reuses skill ids (skl_001, skl_002...) for different skills, and a
@@ -65,6 +85,7 @@ DEFAULTS = {
     "skills_key": 0,
     # True only while the rebuild confirmation is on screen.
     "confirming_rebuild": False,
+    "voice_mode": False,
 }
 
 for key, value in DEFAULTS.items():
@@ -116,6 +137,34 @@ def mention_band(count: int) -> str:
 
 
 st.title("NextRole")
+
+def closing_line(questions, grades) -> str:
+    """What the interviewer says after the LAST answer.
+
+    Without this the interviewer hears the final answer, says nothing at
+    all, and the interview ends on a bare number. Every other answer gets
+    a reply, because the reply is carried in front of the next question
+    -- and the last answer has no next question to carry it.
+    """
+    last = grades.get(questions[-1]["id"]) or {}
+    return f"{last.get('reaction', '')} That's everything from me. Thanks for your time.".strip()
+
+
+def interviewer_line(questions, grades, index) -> str:
+    """What the interviewer says at question `index`.
+
+    A reaction to the previous answer, then the question itself -- so it
+    sounds like one conversation instead of a list of questions read out
+    loud. Worked out here, never stored: the reaction is already part of
+    the grade saved for the previous answer.
+    """
+    line = questions[index]["question"]
+    if index > 0:
+        previous = grades.get(questions[index - 1]["id"])
+        if previous and previous.get("reaction"):
+            line = f"{previous['reaction']} {line}"
+    return line
+
 
 with st.sidebar:
     st.button("Start Over", on_click=reset_all, use_container_width=True)
@@ -426,6 +475,11 @@ if st.session_state.skills:
     )
     st.caption("Each skill costs one web search and one Groq call.")
 
+    st.session_state.voice_mode = st.toggle(
+        "Voice mode",
+        value=st.session_state.voice_mode,
+        help="The interviewer reads each question out loud, and you answer by speaking.",
+    )
     if st.button("Start interview", type="primary"):
         try:
             with st.spinner("Preparing your questions..."):
@@ -445,56 +499,210 @@ if st.session_state.skills:
         else:
             st.session_state.interview_questions = questions
             st.session_state.interview_grades = {}
+            st.session_state.interview_level = START_LEVEL
+            st.session_state.follow_up_error = None
 
     if st.session_state.interview_questions:
         questions = st.session_state.interview_questions
         grades = st.session_state.interview_grades
         skill_names = {s["id"]: s["name"] for s in st.session_state.skills}
 
-        for question in questions:
-            with st.container(border=True):
-                # Where the question came from -- every question can show it.
-                if question["type"] == "cv":
-                    st.caption(f'About your CV: "{question["based_on"]}"')
-                elif question["type"] == "job_posting":
-                    st.caption(f'About the job posting: "{question["based_on"]}"')
-                elif question["source_url"]:
-                    st.caption(f"{skill_names.get(question['skill_id'], 'Skill')} -- "
-                               f"a real interview question from {question['source_url']}")
-                else:
-                    st.caption(f"{skill_names.get(question['skill_id'], 'Skill')} -- "
-                               "written by Groq, no matching question found online")
-                st.markdown(f"**{question['question']}**")
+        if st.session_state.voice_mode:
+            # -------------------------------------------------------------
+            # The conversational path
+            # -------------------------------------------------------------
+            # Everything that has to feel instant -- speaking, hearing you,
+            # the words arriving on screen as you talk, noticing that you
+            # have stopped -- happens in the browser, inside
+            # voice_component. Python is reached once per turn, when you
+            # finish answering. It could never have held a live microphone
+            # itself: Streamlit reruns this entire script top to bottom on
+            # every interaction.
+            #
+            # The transcript below stores nothing new. It is worked out
+            # from the grades we already have, so every line on screen can
+            # be pointed at a real question or a real graded answer.
+            answered = len(grades)
 
-                grade = grades.get(question["id"])
-                if grade is None:
-                    with st.form(key=f"form_{question['id']}"):
-                        answer = st.text_area("Your answer", key=f"answer_{question['id']}")
-                        submitted = st.form_submit_button("Submit answer")
-                    if submitted:
-                        try:
-                            with st.spinner("Grading your answer..."):
-                                new_grade = grade_answer(question, answer)
-                        except Exception as e:
-                            st.error(
-                                "Couldn't grade that answer. This is usually a Groq API "
-                                "issue -- try submitting again in a moment."
+            # Three containers, made in a fixed order before anything is
+            # written into them.
+            #
+            # This is not tidiness. Streamlit rebuilds a component's iframe
+            # when the component moves in the page, and a rebuilt iframe
+            # never receives its question: Streamlit has already marked
+            # this component ready, so the new iframe saying hello is
+            # ignored. The interview then stops dead with no error at all.
+            # Growing the conversation above the component moved it every
+            # single turn. Made this way, the component is always the third
+            # thing here no matter how long the conversation gets, and the
+            # history is written into a box that was already in place.
+            history_box = st.container()
+            question_box = st.container()
+            live_box = st.container()
+            marks_box = st.container()
+
+            with history_box:
+                for i in range(answered):
+                    with st.chat_message("assistant"):
+                        st.write(interviewer_line(questions, grades, i))
+                    with st.chat_message("user"):
+                        st.write(grades[questions[i]["id"]]["answer"] or "(said nothing)")
+
+            if answered < len(questions):
+                with question_box:
+                    with st.chat_message("assistant"):
+                        st.write(interviewer_line(questions, grades, answered))
+
+                with live_box:
+                    reply = voice_component(
+                        say=interviewer_line(questions, grades, answered),
+                        turn=answered,
+                        listen=True,
+                        default=None,
+                        key="voice_turn",
+                    )
+
+                    if st.session_state.follow_up_error:
+                        st.caption(
+                            "Couldn't write a follow-up to your last answer, so "
+                            "we moved on. "
+                            f"({st.session_state.follow_up_error})"
+                        )
+
+                    # The component hands back its last answer again on
+                    # every rerun. The turn number is what tells a fresh
+                    # answer from one already graded -- without it,
+                    # question 1 would be graded over and over in a loop.
+                    said = None
+                    if reply and reply.get("turn") == answered:
+                        said = (reply.get("transcript") or "").strip()
+
+                    # A way through that needs no microphone at all. A
+                    # browser with no speech recognition, a refused
+                    # permission, or a component that fails to connect
+                    # would otherwise leave the interview stuck with
+                    # nothing the candidate can do about it. Both routes
+                    # feed the same grading call below.
+                    with st.expander("Type this answer instead"):
+                        with st.form(key=f"typed_{answered}"):
+                            typed = st.text_area("Your answer", label_visibility="collapsed")
+                            if st.form_submit_button("Submit") and typed.strip():
+                                said = typed.strip()
+
+                if said:
+                    try:
+                        with st.spinner("Thinking..."):
+                            new_grade = grade_answer(questions[answered], said)
+                    except Exception as e:
+                        st.error(
+                            "Couldn't grade that answer. This is usually a Groq API "
+                            "issue -- try again in a moment."
+                        )
+                        with st.expander("Technical details"):
+                            st.exception(e)
+                    else:
+                        asked = questions[answered]
+                        grades[asked["id"]] = new_grade
+                        st.session_state.follow_up_error = None
+
+                        # What a real interviewer does with a thin answer:
+                        # push on what you just said, rather than read out
+                        # the model answer and change the subject. Only
+                        # once per question -- a follow-up that goes badly
+                        # does not earn another follow-up, or a struggling
+                        # candidate would never get off the topic.
+                        level = st.session_state.interview_level
+                        ratio = new_grade["score"] / new_grade["max_score"]
+                        if ratio <= LEVEL_DOWN_RATIO and asked["type"] != "follow_up":
+                            try:
+                                questions.insert(
+                                    answered + 1,
+                                    generate_follow_up(asked, said, level),
+                                )
+                            except Exception as follow_up_failed:
+                                # Not worth losing a graded answer over.
+                                # The interview moves on -- and says so,
+                                # rather than quietly skipping a step.
+                                st.session_state.follow_up_error = str(follow_up_failed)
+
+                        st.session_state.interview_level = next_level(
+                            level, new_grade["score"], new_grade["max_score"]
+                        )
+                        st.rerun()
+
+            else:
+                # Every answer gets a reply, including the last one.
+                with question_box:
+                    with st.chat_message("assistant"):
+                        st.write(closing_line(questions, grades))
+                with live_box:
+                    voice_component(
+                        say=closing_line(questions, grades),
+                        turn=answered,
+                        listen=False,      # speak, then stop -- nothing left to ask
+                        default=None,
+                        key="voice_turn",
+                    )
+
+            if answered:
+                with marks_box:
+                    with st.expander("Marks so far"):
+                        for i in range(answered):
+                            graded = grades[questions[i]["id"]]
+                            st.markdown(
+                                f"**Q{i + 1} -- {graded['score']:g} / {graded['max_score']}**"
                             )
-                            with st.expander("Technical details"):
-                                st.exception(e)
-                        else:
-                            grades[question["id"]] = new_grade
-                            st.rerun()  # show the grade and the next question
-                    break  # later questions stay hidden until this one is graded
+                            for mark in graded["marks"]:
+                                st.write(f"{MARK_ICONS[mark['mark']]} {mark['key_point']}")
+                            st.caption(graded["feedback"])
+        else:
+            for question in questions:
+                with st.container(border=True):
+                    # Where the question came from -- every question can show it.
+                    if question["type"] == "cv":
+                        st.caption(f'About your CV: "{question["based_on"]}"')
+                    elif question["type"] == "job_posting":
+                        st.caption(f'About the job posting: "{question["based_on"]}"')
+                    elif question["source_url"]:
+                        st.caption(f"{skill_names.get(question['skill_id'], 'Skill')} -- "
+                                   f"a real interview question from {question['source_url']}")
+                    else:
+                        st.caption(f"{skill_names.get(question['skill_id'], 'Skill')} -- "
+                                   "written by Groq, no matching question found online")
+                    st.markdown(f"**{question['question']}**")
 
-                st.markdown(f"> {grade['answer'] or '(no answer)'}")
-                st.markdown(f"**Score: {grade['score']:g} / {grade['max_score']}**")
-                for mark in grade["marks"]:
-                    line = f"{MARK_ICONS[mark['mark']]} {mark['key_point']}"
-                    if mark["evidence"]:
-                        line += f' -- you said: "{mark["evidence"]}"'
-                    st.write(line)
-                st.info(grade["feedback"])
+                
+                    grade = grades.get(question["id"])
+                    if grade is None:
+                        qid = question["id"]
+                        with st.form(key=f"form_{qid}"):
+                            answer = st.text_area("Your answer", key=f"answer_{qid}")
+                            submitted = st.form_submit_button("Submit answer")
+
+                        if submitted:
+                            try:
+                                with st.spinner("Grading your answer..."):
+                                    new_grade = grade_answer(question, answer)
+                            except Exception as e:
+                                st.error(
+                                    "Couldn't grade that answer. This is usually a Groq API "
+                                    "issue -- try submitting again in a moment."
+                                )
+                                with st.expander("Technical details"):
+                                    st.exception(e)
+                            else:
+                                grades[question["id"]] = new_grade
+                                st.rerun()  # show the grade and the next question
+                        break  # later questions stay hidden until this one is graded
+
+                    st.markdown(f"> {grade['answer'] or '(no answer)'}")
+                    st.markdown(f"**Score: {grade['score']:g} / {grade['max_score']}**")
+                    for mark in grade["marks"]:
+                        line = f"{MARK_ICONS[mark['mark']]} {mark['key_point']}"
+                        if mark["evidence"]:
+                            line += f' -- you said: "{mark["evidence"]}"'
+                        st.write(line)
+                    st.info(grade["feedback"])
 
         if len(grades) == len(questions):
             total = sum(g["score"] for g in grades.values())

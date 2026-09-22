@@ -1,0 +1,240 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  /* This page is an iframe. It inherits none of Streamlit's styling, so
+     on a dark theme the default black text lands on a dark panel and
+     disappears. Streamlit sends its real colours with every render --
+     applyTheme() below writes them into these variables. The values here
+     are only what shows in the split second before that arrives. */
+  :root { --ink: #262730; --panel: rgba(128,128,128,.10); --edge: rgba(128,128,128,.35); }
+  body { margin: 0; color: var(--ink);
+         font-family: "Source Sans Pro", system-ui, sans-serif; }
+  #panel { border: 1px solid var(--edge); border-radius: 8px; padding: 14px;
+           background: var(--panel); }
+  #status { font-size: 13px; opacity: .75; margin-bottom: 6px; }
+  #live { min-height: 46px; font-size: 17px; line-height: 1.45; color: var(--ink); }
+  #live .interim { opacity: .55; }
+  #dot { display:inline-block; width:9px; height:9px; border-radius:50%;
+         background:#d33; margin-right:6px; vertical-align:middle; }
+  #dot.idle { background:#888; }
+  button { font: 14px inherit; padding: 5px 12px; margin-right: 8px;
+           border-radius: 6px; border: 1px solid var(--edge);
+           background: transparent; color: var(--ink); cursor: pointer; }
+  button:hover { border-color: var(--ink); }
+  #controls { margin-top: 10px; }
+</style>
+</head>
+<body>
+<div id="panel">
+  <div id="status"><span id="dot" class="idle"></span><span id="statusText">Starting…</span></div>
+  <div id="live"></div>
+  <div id="controls">
+    <button id="done">I'm done answering</button>
+    <button id="replay">Hear the question again</button>
+  </div>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// The Streamlit component protocol, written out by hand.
+//
+// The official way to build a component is an npm package and a build step.
+// This is four postMessage calls, so it is written directly instead -- no
+// node toolchain, nothing to rebuild, and the whole contract is visible on
+// this page.
+// ---------------------------------------------------------------------------
+function send(type, extra) {
+  window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: type }, extra), "*");
+}
+const setValue  = (value) => send("streamlit:setComponentValue", { value: value, dataType: "json" });
+const setHeight = (h)     => send("streamlit:setFrameHeight", { height: h });
+
+const liveEl   = document.getElementById("live");
+const statusEl = document.getElementById("statusText");
+const dotEl    = document.getElementById("dot");
+
+function status(text, listening) {
+  statusEl.textContent = text;
+  dotEl.className = listening ? "" : "idle";
+}
+
+// ---------------------------------------------------------------------------
+// One turn = the interviewer speaks, then listens until you stop talking.
+// ---------------------------------------------------------------------------
+const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+let turn = null;          // which question we are on, from Python
+let spokenLine = "";      // what the interviewer says this turn
+let finalText = "";       // what has been recognised for good
+let interimText = "";     // what is still being guessed at
+let recogniser = null;
+let silenceTimer = null;
+let submitted = false;
+
+function render() {
+  liveEl.innerHTML = finalText
+    ? finalText + '<span class="interim">' + interimText + "</span>"
+    : '<span class="interim">' + (interimText || "") + "</span>";
+}
+
+function speak(text, then) {
+  // onend and the timeout below can both fire. Guard so listening only
+  // ever starts once -- two recognisers at once means doubled words.
+  let moved = false;
+  const go = () => { if (!moved) { moved = true; then(); } };
+
+  if (!text || !window.speechSynthesis) { go(); return; }
+  window.speechSynthesis.cancel();
+  const line = new SpeechSynthesisUtterance(text);
+  line.rate = 0.98;
+  line.onend = go;
+  line.onerror = go;
+  window.speechSynthesis.speak(line);
+
+  // Browsers refuse to play audio until the page has been clicked. If
+  // nothing actually started, don't sit in silence waiting for an onend
+  // that will never come -- start listening and let the replay button
+  // do the talking.
+  setTimeout(() => { if (!window.speechSynthesis.speaking) go(); }, 1400);
+}
+
+function resetSilence() {
+  clearTimeout(silenceTimer);
+  // Two and a half seconds of quiet ends your turn. Shorter cuts people
+  // off mid-thought; longer and the interview feels like it has frozen.
+  silenceTimer = setTimeout(finish, 2500);
+}
+
+function listen() {
+  if (!Recognition) {
+    status("This browser can't listen. Use Chrome or Edge, or switch voice mode off and type.", false);
+    return;
+  }
+  recogniser = new Recognition();
+  recogniser.continuous = true;
+  recogniser.interimResults = true;   // this is what puts words on screen as you talk
+  recogniser.lang = "en-US";
+
+  recogniser.onstart = () => status("Listening — just start talking.", true);
+
+  recogniser.onresult = (event) => {
+    interimText = "";
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const chunk = event.results[i][0].transcript;
+      if (event.results[i].isFinal) finalText += chunk + " ";
+      else interimText += chunk;
+    }
+    render();
+    resetSilence();
+  };
+
+  recogniser.onerror = (event) => {
+    if (event.error === "no-speech") { resetSilence(); return; }
+    if (event.error === "not-allowed") {
+      status("The microphone is blocked. Allow it in the address bar, then reload.", false);
+      return;
+    }
+    status("Microphone trouble: " + event.error, false);
+  };
+
+  // Chrome stops recognition on its own after a pause. If we still want
+  // this turn, start again rather than losing the rest of the answer.
+  recogniser.onend = () => {
+    if (!submitted) { try { recogniser.start(); } catch (err) { /* already running */ } }
+  };
+
+  try { recogniser.start(); } catch (err) { status("Couldn't start listening: " + err.message, false); }
+}
+
+function finish() {
+  if (submitted) return;
+  const said = (finalText + interimText).trim();
+  if (!said) { status("I didn't catch that — try again, a bit louder.", true); resetSilence(); return; }
+
+  submitted = true;
+  clearTimeout(silenceTimer);
+  if (recogniser) { try { recogniser.stop(); } catch (err) {} }
+  status("Got it — thinking…", false);
+  setValue({ turn: turn, transcript: said });
+}
+
+function startTurn(say, shouldListen) {
+  spokenLine = say;
+  finalText = "";
+  interimText = "";
+  // A closing line has nothing to send back, and `submitted` is also what
+  // stops the recogniser restarting itself -- so setting it here does both.
+  submitted = !shouldListen;
+  render();
+  status("Speaking…", false);
+  document.getElementById("done").style.display = shouldListen ? "" : "none";
+  speak(say, shouldListen
+    ? listen
+    : () => status("That's the end of the interview.", false));
+}
+
+document.getElementById("done").onclick = finish;
+document.getElementById("replay").onclick = () => speak(spokenLine, () => {});
+
+function applyTheme(theme) {
+  if (!theme) return;
+  const root = document.documentElement.style;
+  if (theme.textColor) {
+    root.setProperty("--ink", theme.textColor);
+    // A border built from the text colour works on any theme, which a
+    // fixed grey does not: grey on charcoal is invisible.
+    root.setProperty("--edge", theme.textColor + "59");   // ~35% alpha
+  }
+  if (theme.secondaryBackgroundColor) root.setProperty("--panel", theme.secondaryBackgroundColor);
+  if (theme.font) document.body.style.fontFamily = theme.font;
+}
+
+// ---------------------------------------------------------------------------
+// Python talks to us here. A render with the same turn number is just
+// Streamlit redrawing the page -- ignore it, or the interviewer would
+// repeat the question every time anything else on the page changed.
+// ---------------------------------------------------------------------------
+let gotFirstRender = false;
+
+window.addEventListener("message", (event) => {
+  if (!event.data || event.data.type !== "streamlit:render") return;
+  gotFirstRender = true;
+  window.lastRender = event.data;          // a hook for the browser console
+  applyTheme(event.data.theme);
+
+  const args = event.data.args || {};
+  if (args.turn === turn) return;
+  turn = args.turn;
+  startTurn(args.say || "", args.listen !== false);
+});
+
+// ---------------------------------------------------------------------------
+// Announce ourselves until Streamlit actually answers.
+//
+// Streamlit throws this iframe away and builds a new one for every turn,
+// and the new one only receives its question after it has said
+// "componentReady". Saying that once is a race: if it arrives before
+// Streamlit has attached its listener, nobody hears it, no question is
+// ever sent, and the interview stops dead on the line below -- which is
+// exactly what happened after question two. Keep saying it until an
+// answer comes back.
+// ---------------------------------------------------------------------------
+send("streamlit:componentReady", { apiVersion: 1 });
+setHeight(190);
+
+const knocking = setInterval(() => {
+  if (gotFirstRender) { clearInterval(knocking); return; }
+  send("streamlit:componentReady", { apiVersion: 1 });
+}, 250);
+
+// If it is still quiet after three seconds something is wrong that
+// knocking will not fix, and a frozen panel with no explanation is the
+// worst way to say so.
+setTimeout(() => {
+  if (!gotFirstRender) status("Still connecting -- if this stays, reload the page.", false);
+}, 3000);
+</script>
+</body>
+</html>

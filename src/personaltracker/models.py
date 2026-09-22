@@ -69,6 +69,12 @@ class Mark(BaseModel):
 class MarksReply(BaseModel):
     marks: Annotated[list[Mark], Field(min_length=1)]
     feedback: Text
+    # What the interviewer says out loud before the next question --
+    # "Okay, so you reached for a queue there." Optional on purpose: it
+    # is social glue, not part of the score, so a reply that leaves it
+    # out must not throw away a grade that is otherwise perfectly good.
+    # interview.py writes a plain one from the marks instead.
+    reaction: str = ""
 
 
 class CvQuestion(BaseModel):
@@ -88,6 +94,19 @@ class PostingQuestion(BaseModel):
 
 class PostingQuestionsReply(BaseModel):
     questions: Annotated[list[PostingQuestion], Field(min_length=1)]
+
+
+class FollowUpReply(BaseModel):
+    """One more question about the answer just given.
+
+    based_on is a phrase from the CANDIDATE'S ANSWER, not from the CV or
+    a posting -- a follow-up is about what they just said, so that is the
+    text the quote has to be found in.
+    """
+
+    question: Text
+    based_on: Text
+    key_points: KeyPoints
 
 
 class SkillQuestion(BaseModel):
