@@ -18,9 +18,10 @@ from .clients import groq_client
 MODEL = "openai/gpt-oss-120b"
 
 
-def ask_groq(prompt: str, max_tokens: int | None = None) -> str:
+def ask_groq(prompt: str, max_tokens: int | None = None,
+             temperature: float | None = None) -> str:
     """Send one prompt and return the reply as plain text."""
-    return _create(prompt, max_tokens=max_tokens)
+    return _create(prompt, max_tokens=max_tokens, temperature=temperature)
 
 
 def ask_groq_for_json(prompt: str, what: str, max_tokens: int | None = None) -> dict:
@@ -38,7 +39,8 @@ def ask_groq_for_json(prompt: str, what: str, max_tokens: int | None = None) -> 
         raise ValueError(f"Groq's {what} reply wasn't JSON: {raw_text[:200]!r}") from err
 
 
-def _create(prompt: str, max_tokens: int | None = None, json_mode: bool = False) -> str:
+def _create(prompt: str, max_tokens: int | None = None, json_mode: bool = False,
+            temperature: float | None = None) -> str:
     """The actual API call. Optional settings are only sent when asked
     for, so the request looks exactly like it did before."""
     options = {}
@@ -46,6 +48,11 @@ def _create(prompt: str, max_tokens: int | None = None, json_mode: bool = False)
         options["max_tokens"] = max_tokens
     if json_mode:
         options["response_format"] = {"type": "json_object"}
+    # `is not None`, not a truthiness check: temperature=0 is the whole
+    # point of this parameter and 0 is falsy, so `if temperature:` would
+    # silently drop the one value callers actually ask for.
+    if temperature is not None:
+        options["temperature"] = temperature
 
     response = groq_client.chat.completions.create(
         model=MODEL,

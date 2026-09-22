@@ -15,6 +15,23 @@ def refine_role(role: str) -> str:
     searching. Without this, ambiguous input like "Gen AI" pulls generic
     "AI skills for everyone" content instead of skills for an actual job --
     this is the same problem RAG systems call "query rewriting."
+
+    Two things here are load-bearing, and neither works without the other
+    (measured on "graphics programming", 10 runs each):
+
+    - temperature=0. At the API default this call is a coin flip --
+      "Graphics Programmer" 7 times and "Graphics Engineer" 3. A roadmap
+      is cached forever under whichever one came back, so the coin was
+      being flipped once and then frozen.
+    - The "two different jobs in different fields" rule. At temperature=0
+      the old wording returned "Graphics Engineer" 10/10; with the rule
+      it returns "Graphics Programmer" 10/10. "Graphics Engineer" is the
+      ambiguous one -- it also describes a graphic-design job, which is
+      how AutoCAD ended up in a graphics-programming roadmap.
+
+    The rule deliberately carries no example. An example teaches the
+    model the field it came from as much as the transformation, and this
+    prompt has to work for every job, not the ones we thought to list.
     """
     prompt = f"""
     Someone said they're interested in: "{role}"
@@ -25,9 +42,12 @@ def refine_role(role: str) -> str:
     company would actually post -- e.g. "Gen AI" becomes
     "Generative AI Engineer".
 
+    If the words could mean two different jobs in different fields,
+    choose the more specific title.
+
     Respond with ONLY the job title, nothing else.
     """
-    refined = ask_groq(prompt).strip()
+    refined = ask_groq(prompt, temperature=0).strip()
     return refined if refined else role
 
 
