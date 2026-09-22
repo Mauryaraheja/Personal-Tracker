@@ -768,3 +768,19 @@ def test_a_suggested_skill_is_listed_only_once(monkeypatch):
     result = mv.compare_to_roadmap(ROADMAP, MARKET)
 
     assert [s["skill_name"] for s in result["suggested_additions"]] == ["Pinecone"]
+
+
+def test_skill_grouping_asks_for_a_deterministic_answer(monkeypatch, recording_groq):
+    """Same input must give the same grouping.
+
+    At the API default, 4 runs over 11 frozen postings produced 2
+    different groupings -- "OpenGL"/"OpenGL ES" merged in half of them.
+    A grouping change moves mention_count, which can move a roadmap
+    skill between confirmed and weak_signal with nothing else changed.
+    """
+    recorder = recording_groq({"skill_groups": []})
+    monkeypatch.setattr(llm, "groq_client", recorder)
+
+    mv.consolidate_skill_mentions([{"skill_name": "Spark", "source_url": "u"}])
+
+    assert recorder.calls[0]["temperature"] == 0

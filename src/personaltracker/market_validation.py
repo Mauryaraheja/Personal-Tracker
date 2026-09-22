@@ -422,7 +422,17 @@ def consolidate_skill_mentions(raw_mentions: list[dict]) -> list[dict]:
     """
 
     try:
-        data = ask_groq_for_json(prompt, "skill grouping", max_tokens=8000)
+        # temperature=0 because this step must answer the same way twice.
+        # Measured on 11 frozen postings, 4 runs each: at the API default
+        # it gave 2 different groupings out of 4 runs -- "OpenGL" and
+        # "OpenGL ES" merged in 2 runs and stayed apart in the other 2,
+        # which moves a skill's mention_count and can move a roadmap
+        # skill between confirmed and weak_signal on identical input.
+        # At temperature=0 all 4 runs were identical, and the answer it
+        # settles on (keep them apart) is the one this prompt asks for:
+        # "When unsure, leave them as separate groups rather than merging."
+        data = ask_groq_for_json(prompt, "skill grouping", max_tokens=8000,
+                                 temperature=0)
         groups = SkillGroupsReply.model_validate(data).skill_groups
     except ValueError as err:
         print(err)

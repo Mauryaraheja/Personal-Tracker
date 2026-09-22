@@ -310,6 +310,16 @@ def rebuild_roadmap(role: str) -> list[dict]:
     normalize_text so "Ray Tracing" and "ray  tracing" count as one. A
     skill the new roadmap drops takes its notes with it -- there is
     nothing left to attach them to.
+
+    The saved refined_title is reused, NOT re-derived. refine_role could
+    return a different title now -- its prompt has changed since -- and a
+    different title normalizes to a different role_key, which would leave
+    every tracker row for this role pointing at a key nothing reads. The
+    roadmap would look rebuilt and the progress would look deleted.
+    get_market_validation already refuses to re-refine for the same
+    reason. To pick up a refine_role change, type a new spelling of the
+    role: that creates its own alias and its own roadmap, leaving this
+    one intact.
     """
     init_db()
     with _connect() as conn:

@@ -24,14 +24,16 @@ def ask_groq(prompt: str, max_tokens: int | None = None,
     return _create(prompt, max_tokens=max_tokens, temperature=temperature)
 
 
-def ask_groq_for_json(prompt: str, what: str, max_tokens: int | None = None) -> dict:
+def ask_groq_for_json(prompt: str, what: str, max_tokens: int | None = None,
+                      temperature: float | None = None) -> dict:
     """Send one prompt in JSON mode and return the reply as a dict.
 
     JSON mode guarantees valid JSON, not the right shape, so callers
     still check what came back. `what` names the step in the error
     message, e.g. "grading" -> "Groq's grading reply wasn't JSON".
     """
-    raw_text = _create(prompt, max_tokens=max_tokens, json_mode=True)
+    raw_text = _create(prompt, max_tokens=max_tokens, json_mode=True,
+                       temperature=temperature)
 
     try:
         return json.loads(raw_text)

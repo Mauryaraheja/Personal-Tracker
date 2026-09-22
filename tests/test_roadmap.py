@@ -6,8 +6,6 @@ app showed nothing -- no error at all. These pin down that it now fails
 loudly instead.
 """
 
-from types import SimpleNamespace
-
 import pytest
 from personaltracker import roadmap
 from personaltracker import llm
@@ -58,34 +56,14 @@ def test_a_reply_that_is_not_json_raises(monkeypatch,fake_groq):
 # refine_role: the same input must give the same job title
 # ---------------------------------------------------------------------------
 
-class RecordingGroq:
-    """Like the fake_groq fixture, but it remembers how it was called.
-
-    conftest's fake_groq only controls the reply. These tests are about
-    the request -- which settings reach the API -- so they need the
-    kwargs, not the answer.
-    """
-
-    def __init__(self, reply="Graphics Programmer"):
-        self.calls = []
-
-        def create(**kwargs):
-            self.calls.append(kwargs)
-            return SimpleNamespace(
-                choices=[SimpleNamespace(message=SimpleNamespace(content=reply))]
-            )
-
-        self.chat = SimpleNamespace(completions=SimpleNamespace(create=create))
-
-
-def test_refine_role_asks_for_a_deterministic_answer(monkeypatch):
+def test_refine_role_asks_for_a_deterministic_answer(monkeypatch, recording_groq):
     """A roadmap is cached forever under whatever title comes back here.
 
     At the API default this call was a coin flip between "Graphics
     Programmer" and "Graphics Engineer" -- so the same typed role could
     give two different roadmaps depending on the day.
     """
-    recorder = RecordingGroq()
+    recorder = recording_groq("Graphics Programmer")
     monkeypatch.setattr(llm, "groq_client", recorder)
 
     roadmap.refine_role("graphics programming")
@@ -93,9 +71,9 @@ def test_refine_role_asks_for_a_deterministic_answer(monkeypatch):
     assert recorder.calls[0]["temperature"] == 0
 
 
-def test_temperature_zero_is_actually_sent(monkeypatch):
+def test_temperature_zero_is_actually_sent(monkeypatch, recording_groq):
     """Guards the falsy-zero trap: `if temperature:` would drop it."""
-    recorder = RecordingGroq()
+    recorder = recording_groq("Graphics Programmer")
     monkeypatch.setattr(llm, "groq_client", recorder)
 
     llm.ask_groq("anything", temperature=0)
@@ -104,9 +82,9 @@ def test_temperature_zero_is_actually_sent(monkeypatch):
     assert recorder.calls[0]["temperature"] == 0
 
 
-def test_a_call_that_asks_for_no_temperature_sends_none(monkeypatch):
+def test_a_call_that_asks_for_no_temperature_sends_none(monkeypatch, recording_groq):
     """Every other call site must look exactly as it did before."""
-    recorder = RecordingGroq()
+    recorder = recording_groq("Graphics Programmer")
     monkeypatch.setattr(llm, "groq_client", recorder)
 
     llm.ask_groq("anything")
@@ -114,13 +92,13 @@ def test_a_call_that_asks_for_no_temperature_sends_none(monkeypatch):
     assert "temperature" not in recorder.calls[0]
 
 
-def test_refine_role_tells_the_model_to_prefer_the_specific_title(monkeypatch):
+def test_refine_role_tells_the_model_to_prefer_the_specific_title(monkeypatch, recording_groq):
     """The rule that flips "Graphics Engineer" -> "Graphics Programmer".
 
     Pinned as text because it is the whole fix, and because it must stay
     general -- no field-specific example belongs in this prompt.
     """
-    recorder = RecordingGroq()
+    recorder = recording_groq("Graphics Programmer")
     monkeypatch.setattr(llm, "groq_client", recorder)
 
     roadmap.refine_role("graphics programming")

@@ -100,6 +100,32 @@ def fake_llm(monkeypatch):
 
 
 @pytest.fixture
+def recording_groq():
+    """Like fake_groq, but it remembers how it was called.
+
+    fake_groq only controls the reply. Some tests are about the REQUEST
+    -- which settings actually reach the API -- so they need the kwargs,
+    not the answer. Call it with the reply you want: recording_groq(...)
+    returns a client whose `.calls` is a list of kwargs.
+    """
+
+    class Recorder:
+        def __init__(self, reply):
+            self.calls = []
+            content = reply if isinstance(reply, str) else json.dumps(reply)
+
+            def create(**kwargs):
+                self.calls.append(kwargs)
+                return SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+                )
+
+            self.chat = SimpleNamespace(completions=SimpleNamespace(create=create))
+
+    return Recorder
+
+
+@pytest.fixture
 def fake_groq():
     """A stand-in for groq_client, shared by every test file.
 
