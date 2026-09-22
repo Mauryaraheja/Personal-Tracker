@@ -10,6 +10,8 @@ the job posting, that the reply has the right shape, the key point text
 and the score.
 """
 
+import re
+
 from .clients import tavily_client
 from .llm import ask_groq_for_json
 from .models import (
@@ -19,11 +21,62 @@ from .models import (
     SkillQuestionsReply,
 )
 from .roadmap import format_sources_for_prompt
-from .text import normalize_text
 
 # How much each mark is worth. The score is always added up here, in
 # Python -- never taken from the model.
+_PUNCTUATION = re.compile(r"[^\w\s]+")
+
 MARK_VALUES = {"covered": 1, "partly": 0.5, "missed": 0}
+
+
+# The difficulty ladder. Python owns it, not Groq: the level is worked
+# out from the score Python already adds up, so how hard the next
+# question is can never be the model's opinion of how it is going.
+MIN_LEVEL = 1
+MAX_LEVEL = 5
+START_LEVEL = 2
+
+# What each level means, in the words the prompt will use. Groq is TOLD
+# a level and writes a question at it -- it never picks one.
+LEVEL_NAMES = {
+    1: "basic -- a definition, or a simple 'what is' question",
+    2: "straightforward -- everyday use of the idea",
+    3: "intermediate -- applying it to a realistic situation",
+    4: "advanced -- trade-offs, edge cases, why one approach over another",
+    5: "expert -- designing under constraints, failure modes, scale",
+}
+
+# How well the last answer has to go before the next question gets
+# harder or easier. A ratio, not "every key point covered": grading is
+# already partial (covered / partly / missed), so a ratio uses the half
+# marks instead of throwing them away.
+LEVEL_UP_RATIO = 0.75
+LEVEL_DOWN_RATIO = 0.35
+
+
+def next_level(level: int, score: float, max_score: float) -> int:
+    """How hard the NEXT question should be, from how the last answer went.
+
+    No Groq call. Everything this needs is already worked out: the level
+    we asked at, and the score grade_answer added up.
+
+    Both inputs are checked rather than nudged into range. A level of 9,
+    or a question with no key points, is a bug in our own code -- and a
+    silently clamped level would hide it. The interview would just
+    quietly stop getting harder, with nothing to explain why.
+    """
+    if level not in LEVEL_NAMES:
+        raise ValueError(f"level must be {MIN_LEVEL}-{MAX_LEVEL}, got {level!r}")
+    if max_score <= 0:
+        raise ValueError(f"a question with no key points can't be scored: max_score={max_score!r}")
+
+    ratio = score / max_score
+    if ratio >= LEVEL_UP_RATIO:
+        return min(level + 1, MAX_LEVEL)
+    if ratio <= LEVEL_DOWN_RATIO:
+        return max(level - 1, MIN_LEVEL)
+    return level
+
 
 # A CV question is about the candidate's own work, so there's no textbook
 # answer to check. It's graded on how well they explain themselves -- the
@@ -36,6 +89,23 @@ CV_KEY_POINTS = [
 ]
 
 
+def _words_only(text: str) -> str:
+    """Lowercase words, single-spaced, with punctuation dropped.
+
+    Punctuation is not evidence -- the words are. Comparing it was
+    rejecting real quotes: a candidate wrote "ensemble learning ." and
+    Groq quoted it back as "ensemble learning.", one space apart, and
+    grading died with "Groq's quote isn't in the answer". Typing a space
+    before a comma or a full stop is common, and Groq always tidies it
+    away when it quotes, so this was not a one-off. It also settles
+    straight vs curly apostrophes, which Groq swaps freely.
+
+    Padded with spaces at both ends so a search cannot match part of a
+    word -- without it, "earn" would be found inside "learning".
+    """
+    return " " + " ".join(_PUNCTUATION.sub(" ", text).split()).lower() + " "
+
+
 def _quote_is_in(quote: str, text: str) -> bool:
     """True if the quote really comes from the text.
 
@@ -43,10 +113,14 @@ def _quote_is_in(quote: str, text: str) -> bool:
     a real run. So each piece between the dots is checked on its own:
     every piece must be in the text, in the same order. A made-up piece
     still fails.
+
+    Matching is on words alone (see _words_only). That is deliberately
+    not looser about what was SAID: every word of every piece still has
+    to appear, in order. It is only looser about how it was punctuated.
     """
-    text = normalize_text(text)
-    pieces = [normalize_text(piece) for piece in quote.replace("…", "...").split("...")]
-    pieces = [piece for piece in pieces if piece]
+    text = _words_only(text)
+    pieces = [_words_only(piece) for piece in quote.replace("…", "...").split("...")]
+    pieces = [piece for piece in pieces if piece.strip()]
     if not pieces:
         return False
 
@@ -55,7 +129,9 @@ def _quote_is_in(quote: str, text: str) -> bool:
         found = text.find(piece, position)
         if found == -1:
             return False
-        position = found + len(piece)
+        # -1 so this piece's trailing space can serve as the next
+        # piece's leading space; two pieces may sit side by side.
+        position = found + len(piece) - 1
     return True
 
 

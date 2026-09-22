@@ -522,3 +522,92 @@ def test_a_based_on_shortened_with_dots_is_accepted(monkeypatch, fake_groq):
     questions = interview.generate_cv_questions(CV_TEXT, "Generative AI Engineer")
 
     assert len(questions) == 1
+
+
+
+# ---------------------------------------------------------------------------
+# The difficulty ladder -- pure Python, no Groq call at all
+# ---------------------------------------------------------------------------
+
+def test_a_strong_answer_makes_the_next_question_harder():
+    assert interview.next_level(2, score=3, max_score=4) == 3
+
+
+def test_a_weak_answer_makes_the_next_question_easier():
+    assert interview.next_level(3, score=1, max_score=4) == 2
+
+
+def test_a_middling_answer_keeps_the_same_level():
+    assert interview.next_level(3, score=2, max_score=4) == 3
+
+
+def test_the_level_never_goes_above_the_top():
+    assert interview.next_level(interview.MAX_LEVEL, score=4, max_score=4) == interview.MAX_LEVEL
+
+
+def test_the_level_never_goes_below_the_bottom():
+    assert interview.next_level(interview.MIN_LEVEL, score=0, max_score=4) == interview.MIN_LEVEL
+
+
+def test_half_marks_count_towards_moving_up():
+    # covered + partly + partly = 2 of 3 = 0.67 -- not enough
+    assert interview.next_level(2, score=2, max_score=3) == 2
+    # covered + covered + partly = 2.5 of 3 = 0.83 -- enough
+    assert interview.next_level(2, score=2.5, max_score=3) == 3
+
+
+def test_a_level_outside_the_ladder_is_an_error():
+    with pytest.raises(ValueError, match="level must be"):
+        interview.next_level(9, score=1, max_score=4)
+
+
+def test_a_question_with_no_key_points_is_an_error():
+    with pytest.raises(ValueError, match="can't be scored"):
+        interview.next_level(2, score=0, max_score=0)
+
+
+# ---------------------------------------------------------------------------
+# The quote check must survive ordinary typing
+# ---------------------------------------------------------------------------
+
+REAL_ANSWER = (
+    "Because graph neural networks makes a map and connects every order in "
+    "real time ,  logistic regression basically we used for classification "
+    "that will order will be delivered till this date or not , and gnn "
+    "compares from previous orders and connects every piece . that's why we "
+    "used ensemble learning ."
+)
+
+
+def test_a_quote_matches_even_when_the_spacing_around_punctuation_differs():
+    """The real failure that sent this to the user as a Groq error.
+
+    They typed "ensemble learning ." with a space before the full stop;
+    Groq quoted it back as "ensemble learning." without one. One space
+    apart, and a correct answer could not be graded at all.
+    """
+    quote = (
+        "Because graph neural networks makes a map and connects every order "
+        "in real time , logistic regression basically we used for "
+        "classification ... that's why we used ensemble learning."
+    )
+
+    assert interview._quote_is_in(quote, REAL_ANSWER)
+
+
+def test_a_curly_apostrophe_is_the_same_word():
+    """Groq swaps ' and ’ freely, and neither is evidence of anything."""
+    assert interview._quote_is_in("that’s why we used ensemble learning", REAL_ANSWER)
+
+
+@pytest.mark.parametrize("quote", [
+    "we used a transformer model",                     # never said
+    "Because graph neural networks ... we used BERT",  # invented after the dots
+    "ensemble learning ... graph neural networks",     # real words, wrong order
+    "earn",                                            # part of "learning"
+    "   ",                                             # empty
+    "... ...",                                         # punctuation only
+])
+def test_ignoring_punctuation_does_not_let_a_fake_quote_through(quote):
+    """Looser about commas, exactly as strict about words."""
+    assert not interview._quote_is_in(quote, REAL_ANSWER)
