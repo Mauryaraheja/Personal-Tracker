@@ -23,6 +23,7 @@ from personaltracker import (
     get_market_validation,
     get_refined_title,
     get_tracker_items,
+    rebuild_roadmap,
     update_tracker_status,
 )
 
