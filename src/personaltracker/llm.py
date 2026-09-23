@@ -70,7 +70,7 @@ def _create(prompt: str, max_tokens: int | None = None, json_mode: bool = False,
 # API. "turbo" is the cheap, fast one -- an interview answer is a minute
 # of clear speech, not a noisy two-hour recording.
 TRANSCRIBE_MODEL = "whisper-large-v3-turbo"
-
+#but now the transcribe is automatically done by browser , we don;t need groq for transcripting audio 
 
 def transcribe(audio_bytes: bytes, filename: str = "answer.wav") -> str:
     """Turn a recorded answer into text.
